@@ -5,6 +5,8 @@
 
 int main(int argc, char** argv) {
   QApplication app(argc, argv);
+  app.setApplicationDisplayName(QStringLiteral("CipherShell"));
+  // Keep this stable so existing saved profiles and credentials remain readable.
   app.setApplicationName(QStringLiteral("gmssh-client"));
   app.setOrganizationName(QStringLiteral("internal"));
 

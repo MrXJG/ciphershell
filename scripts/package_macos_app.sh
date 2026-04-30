@@ -5,12 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${GMSSH_BUILD_DIR:-${ROOT_DIR}/build}"
 BUILD_TYPE="${GMSSH_BUILD_TYPE:-Release}"
 REPORT_DIR="${GMSSH_PACKAGE_REPORT_DIR:-${BUILD_DIR}/package-verification/$(date +%Y%m%d-%H%M%S)}"
-APP_PATH="${GMSSH_APP_PATH:-${BUILD_DIR}/gmssh_client.app}"
-APP_EXECUTABLE="${APP_PATH}/Contents/MacOS/gmssh_client"
+APP_PATH="${GMSSH_APP_PATH:-${BUILD_DIR}/CipherShell.app}"
+APP_EXECUTABLE="${APP_PATH}/Contents/MacOS/CipherShell"
 APP_ENGINE_DIR="${APP_PATH}/Contents/MacOS/bin"
 REPORT_PATH="${REPORT_DIR}/package-report.json"
 P1_REPORT_PATH="${REPORT_DIR}/p1-matrix-report.json"
-PACKAGE_FILE_NAME="${GMSSH_PACKAGE_FILE_NAME:-gmssh-client-0.1.0-Darwin}"
+PACKAGE_FILE_NAME="${GMSSH_PACKAGE_FILE_NAME:-ciphershell-0.1.0-Darwin}"
 DMG_PATH="${BUILD_DIR}/${PACKAGE_FILE_NAME}.dmg"
 MACDEPLOYQT_STATUS="skipped"
 DMG_STATUS="skipped"
@@ -231,12 +231,12 @@ if [[ "${GMSSH_CREATE_DMG:-1}" == "1" ]]; then
   dmg_root="${REPORT_DIR}/dmg-root"
   rm -rf "${dmg_root}"
   mkdir -p "${dmg_root}"
-  STAGED_APP_PATH="${dmg_root}/gmssh_client.app"
+  STAGED_APP_PATH="${dmg_root}/CipherShell.app"
   ditto "${APP_PATH}" "${STAGED_APP_PATH}"
   ln -s /Applications "${dmg_root}/Applications"
   sign_and_verify_app "${STAGED_APP_PATH}" "${REPORT_DIR}/codesign-staged-app.log"
   hdiutil create \
-    -volname "GMSSH Client" \
+    -volname "CipherShell" \
     -srcfolder "${dmg_root}" \
     -ov \
     -format UDZO \

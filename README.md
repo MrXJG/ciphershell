@@ -1,4 +1,4 @@
-# GM SSH Client (V1)
+# CipherShell (V1)
 
 Qt/C++ SSH GUI client with GM-aware algorithm policy and OpenSSH engine adapter.
 
@@ -38,9 +38,9 @@ ctest --test-dir build --output-on-failure
 scripts/package_macos_app.sh
 ```
 
-This creates `build/gmssh_client.app`, deploys Qt dependencies, bundles
+This creates `build/CipherShell.app`, deploys Qt dependencies, bundles
 modern and legacy SSH/SFTP engines under `Contents/MacOS/bin`, runs the P1
-matrix with the packaged engines, and emits `build/gmssh-client-0.1.0-Darwin.dmg`.
+matrix with the packaged engines, and emits `build/ciphershell-0.1.0-Darwin.dmg`.
 Set `GMSSH_RUN_PACKAGE_P1=0` to skip remote interoperability checks.
 
 ### Windows x64 (MSVC)
@@ -104,14 +104,14 @@ Recommended source: `src-openeuler/openssh` branch `openEuler-24.03-LTS-SP3`.
 - Known hosts: `${AppConfigLocation}/known_hosts`
 - Audit:
   - Windows installer build: `<install-dir>/log/audit.log` when writable, for example
-    `%LOCALAPPDATA%\Programs\GMSSH Client\log\audit.log`
+    `%LOCALAPPDATA%\Programs\CipherShell\log\audit.log`
   - Fallback / non-Windows: `${AppDataLocation}/log/audit.log`
   - The Audit Log window shows the effective log file path.
 
 ## Windows installer behavior
 
-- Installs to `%LOCALAPPDATA%\Programs\GMSSH Client` by default.
-- Creates a Start Menu shortcut and a Desktop shortcut named `GMSSH Client`.
+- Installs to `%LOCALAPPDATA%\Programs\CipherShell` by default.
+- Creates a Start Menu shortcut and a Desktop shortcut named `CipherShell`.
 - Bundles modern and legacy GM SSH/SFTP engines under `bin/`.
 - Creates `log/audit.log` during install so audit output is discoverable.
 

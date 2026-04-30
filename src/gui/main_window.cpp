@@ -870,7 +870,7 @@ MainWindow::MainWindow()
       audit_logger_(auditLogPath()),
       ssh_adapter_(&audit_logger_) {
   setObjectName(QStringLiteral("mainWindow"));
-  setWindowTitle(QStringLiteral("国密 SSH 客户端"));
+  setWindowTitle(QStringLiteral("CipherShell"));
   resize(initialWindowSize());
 
   const auto ssh_resolution = bundledOrSystemBinary(QStringLiteral("ssh"));
@@ -902,7 +902,7 @@ MainWindow::MainWindow()
   tool_bar->setIconSize(QSize(18, 18));
   tool_bar->setMovable(false);
 
-  auto* brand_label = new QLabel(QStringLiteral("GMSSH CLIENT"), tool_bar);
+  auto* brand_label = new QLabel(QStringLiteral("CipherShell"), tool_bar);
   brand_label->setObjectName(QStringLiteral("brandLabel"));
   tool_bar->addWidget(brand_label);
   tool_bar->addSeparator();

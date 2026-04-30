@@ -14,10 +14,10 @@ if ([string]::IsNullOrWhiteSpace($BuildDir)) {
 }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 $PackageDir = Join-Path $BuildDir "package"
-$StageDir = Join-Path $PackageDir "gmssh-client"
+$StageDir = Join-Path $PackageDir "ciphershell"
 $ReportDir = Join-Path $BuildDir ("package-verification\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-$PortableZip = Join-Path $BuildDir "gmssh-client-0.1.0-win64-portable.zip"
-$InstallerExe = Join-Path $BuildDir "gmssh-client-0.1.0-win64-setup.exe"
+$PortableZip = Join-Path $BuildDir "ciphershell-0.1.0-win64-portable.zip"
+$InstallerExe = Join-Path $BuildDir "ciphershell-0.1.0-win64-setup.exe"
 $ReportPath = Join-Path $ReportDir "package-report.json"
 $PackageTestReportPath = Join-Path $ReportDir "windows-package-test-report.json"
 
@@ -196,7 +196,7 @@ if ($BuildExitCode -ne 0) {
   throw "Build/test failed; see $ReportDir\build-and-test.log"
 }
 
-$AppExe = Join-Path $BuildDir "gmssh_client.exe"
+$AppExe = Join-Path $BuildDir "CipherShell.exe"
 if (!(Test-Path $AppExe)) {
   throw "Built executable not found: $AppExe"
 }
@@ -223,7 +223,7 @@ if (Test-Path $StageEngineDir) {
 $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
 $NativeErrorAction = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-& $WinDeployQt --release --compiler-runtime --dir $StageDir (Join-Path $StageDir "gmssh_client.exe") 2>&1 |
+& $WinDeployQt --release --compiler-runtime --dir $StageDir (Join-Path $StageDir "CipherShell.exe") 2>&1 |
   Tee-Object -FilePath (Join-Path $ReportDir "windeployqt.log")
 $WinDeployQtExitCode = $LASTEXITCODE
 $ErrorActionPreference = $NativeErrorAction
@@ -232,7 +232,7 @@ if ($WinDeployQtExitCode -ne 0) {
 }
 
 # MSYS2's windeployqt can miss the MinGW/UCRT compiler runtime even with
-# --compiler-runtime. These DLLs must sit next to gmssh_client.exe.
+# --compiler-runtime. These DLLs must sit next to CipherShell.exe.
 $GuiRuntimeDlls = @(
   "libgcc_s_seh-1.dll",
   "libstdc++-6.dll",
@@ -264,14 +264,14 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
   [System.IO.Compression.CompressionLevel]::Optimal,
   $false)
 
-$NsisScript = Join-Path $ReportDir "gmssh-client.nsi"
+$NsisScript = Join-Path $ReportDir "ciphershell.nsi"
 $StageForNsis = $StageDir.Replace('\', '\\')
 $InstallerForNsis = $InstallerExe.Replace('\', '\\')
 @"
 Unicode true
-Name "GMSSH Client"
+Name "CipherShell"
 OutFile "$InstallerForNsis"
-InstallDir "`$LOCALAPPDATA\Programs\GMSSH Client"
+InstallDir "`$LOCALAPPDATA\Programs\CipherShell"
 RequestExecutionLevel user
 Page directory
 Page instfiles
@@ -284,13 +284,13 @@ Section "Install"
   FileOpen "`$0" "`$INSTDIR\log\audit.log" a
   FileClose "`$0"
   CreateDirectory "`$SMPROGRAMS"
-  CreateShortCut "`$SMPROGRAMS\GMSSH Client.lnk" "`$INSTDIR\gmssh_client.exe"
-  CreateShortCut "`$DESKTOP\GMSSH Client.lnk" "`$INSTDIR\gmssh_client.exe"
+  CreateShortCut "`$SMPROGRAMS\CipherShell.lnk" "`$INSTDIR\CipherShell.exe"
+  CreateShortCut "`$DESKTOP\CipherShell.lnk" "`$INSTDIR\CipherShell.exe"
   WriteUninstaller "`$INSTDIR\Uninstall.exe"
 SectionEnd
 Section "Uninstall"
-  Delete "`$SMPROGRAMS\GMSSH Client.lnk"
-  Delete "`$DESKTOP\GMSSH Client.lnk"
+  Delete "`$SMPROGRAMS\CipherShell.lnk"
+  Delete "`$DESKTOP\CipherShell.lnk"
   RMDir /r "`$INSTDIR"
 SectionEnd
 "@ | Set-Content -Encoding UTF8 -Path $NsisScript
@@ -357,7 +357,7 @@ $Report = [ordered]@{
   root_dir = $RootDir
   build_dir = $BuildDir
   stage_dir = $StageDir
-  executable = (Join-Path $StageDir "gmssh_client.exe")
+  executable = (Join-Path $StageDir "CipherShell.exe")
   portable_zip = $PortableZip
   installer_exe = $InstallerExe
   report_dir = $ReportDir

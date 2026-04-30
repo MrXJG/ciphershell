@@ -17,13 +17,13 @@ if ([string]::IsNullOrWhiteSpace($BuildDir)) {
 }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 if ([string]::IsNullOrWhiteSpace($StageDir)) {
-  $StageDir = Join-Path $BuildDir "package\gmssh-client"
+  $StageDir = Join-Path $BuildDir "package\ciphershell"
 }
 if ([string]::IsNullOrWhiteSpace($InstallerExe)) {
-  $InstallerExe = Join-Path $BuildDir "gmssh-client-0.1.0-win64-setup.exe"
+  $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.0-win64-setup.exe"
 }
 if ([string]::IsNullOrWhiteSpace($PortableZip)) {
-  $PortableZip = Join-Path $BuildDir "gmssh-client-0.1.0-win64-portable.zip"
+  $PortableZip = Join-Path $BuildDir "ciphershell-0.1.0-win64-portable.zip"
 }
 if ([string]::IsNullOrWhiteSpace($ReportDir)) {
   $ReportDir = Join-Path $BuildDir ("package-verification\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -165,14 +165,14 @@ function Test-EngineAlgorithms([string]$EngineDir, [string]$Prefix) {
 }
 
 function Test-PackageTree([string]$PackageDir, [string]$Name) {
-  $app = Join-Path $PackageDir "gmssh_client.exe"
+  $app = Join-Path $PackageDir "CipherShell.exe"
   $engineDir = Join-Path $PackageDir "bin"
   $modernSsh = Join-Path $engineDir "ssh.exe"
   $modernSftp = Join-Path $engineDir "sftp.exe"
   $legacySsh = Join-Path $engineDir "ssh-legacy-ecgm.exe"
   $legacySftp = Join-Path $engineDir "sftp-legacy-ecgm.exe"
 
-  Assert-File $app "$Name gmssh_client.exe"
+  Assert-File $app "$Name CipherShell.exe"
   foreach ($dll in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "libcrypto-3-x64.dll")) {
     Assert-File (Join-Path $PackageDir $dll) "$Name GUI runtime $dll"
   }
@@ -191,7 +191,7 @@ function Test-PackageTree([string]$PackageDir, [string]$Name) {
   Invoke-CleanPath -PathEntries @($PackageDir, $engineDir, [Environment]::SystemDirectory, $env:WINDIR) -Body {
     & $app --self-test
     if ($LASTEXITCODE -ne 0) {
-      throw "$Name gmssh_client.exe --self-test failed with exit code $LASTEXITCODE"
+      throw "$Name CipherShell.exe --self-test failed with exit code $LASTEXITCODE"
     }
   }
 

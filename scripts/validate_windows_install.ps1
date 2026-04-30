@@ -17,10 +17,10 @@ $ProgressPreference = "SilentlyContinue"
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BuildDir = Join-Path $RootDir "build-win"
 if ([string]::IsNullOrWhiteSpace($InstallerExe)) {
-  $InstallerExe = Join-Path $BuildDir "gmssh-client-0.1.0-win64-setup.exe"
+  $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.0-win64-setup.exe"
 }
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-  $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\GMSSH Client"
+  $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\CipherShell"
 }
 if ([string]::IsNullOrWhiteSpace($ReportDir)) {
   $ReportDir = Join-Path $BuildDir ("install-verification\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
@@ -30,7 +30,7 @@ $InstallerExe = [System.IO.Path]::GetFullPath($InstallerExe)
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 $ReportDir = [System.IO.Path]::GetFullPath($ReportDir)
 $ReportPath = Join-Path $ReportDir "windows-install-validation-report.json"
-$DesktopShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "GMSSH Client.lnk"
+$DesktopShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "CipherShell.lnk"
 $AuditLogPath = Join-Path $InstallDir "log\audit.log"
 $Objdump = "C:\msys64\ucrt64\bin\objdump.exe"
 
@@ -219,7 +219,7 @@ if (!$SkipInstall) {
   }
 }
 
-$App = Join-Path $InstallDir "gmssh_client.exe"
+$App = Join-Path $InstallDir "CipherShell.exe"
 $EngineDir = Join-Path $InstallDir "bin"
 Assert-File $App "installed app"
 Assert-File $DesktopShortcut "desktop shortcut"
@@ -244,7 +244,7 @@ Assert-RecursiveImportsResolved $InstallDir
 
 $SelfTest = Start-Process -FilePath $App -ArgumentList @("--self-test") -Wait -PassThru
 if ($SelfTest.ExitCode -ne 0) {
-  throw "gmssh_client.exe --self-test failed with exit code $($SelfTest.ExitCode)"
+  throw "CipherShell.exe --self-test failed with exit code $($SelfTest.ExitCode)"
 }
 
 $GuiLaunchStatus = "skipped"
