@@ -1,0 +1,9 @@
+<RCC>
+  <qresource prefix="/icons">
+    <file>icons/check-light.svg</file>
+    <file>icons/check-light.png</file>
+    <file>icons/chevron-down.svg</file>
+    <file>icons/chevron-down.png</file>
+    <file>icons/tab-close.svg</file>
+  </qresource>
+</RCC>
