@@ -13,6 +13,8 @@ SSH="${GMSSHD_SSH:-/usr/bin/ssh}"
 SSH_KEYGEN="${GMSSHD_SSH_KEYGEN:-/usr/bin/ssh-keygen}"
 SERVICE_NAME="${GMSSHD_DEBUG_SERVICE:-gmsshd-debug.service}"
 UNIT_FILE="${GMSSHD_DEBUG_UNIT_FILE:-/etc/systemd/system/${SERVICE_NAME}}"
+SELINUX_PORT_TYPE="${GMSSHD_SELINUX_PORT_TYPE:-ssh_port_t}"
+AUTO_INSTALL_SEMANAGE="${GMSSHD_AUTO_INSTALL_SEMANAGE:-1}"
 KEX_ALGORITHMS="${GMSSHD_KEX_ALGORITHMS:-sm2-sm3}"
 HOSTKEY_ALGORITHMS="${GMSSHD_HOSTKEY_ALGORITHMS:-sm2,sm2-cert}"
 PUBKEY_ALGORITHMS="${GMSSHD_PUBKEY_ALGORITHMS:-sm2,sm2-cert}"
@@ -37,6 +39,50 @@ require_binary() {
 
 require_systemd() {
   command -v systemctl >/dev/null 2>&1 || die "systemctl is required for service management"
+}
+
+selinux_mode() {
+  if command -v getenforce >/dev/null 2>&1; then
+    getenforce 2>/dev/null || printf 'Disabled\n'
+    return
+  fi
+  printf 'Disabled\n'
+}
+
+ensure_selinux_port_context() {
+  local mode
+  mode="$(selinux_mode)"
+  printf 'selinux_mode=%s\n' "${mode}"
+  if [[ "${mode}" == "Disabled" ]]; then
+    return 0
+  fi
+
+  if ! command -v semanage >/dev/null 2>&1; then
+    if [[ "${AUTO_INSTALL_SEMANAGE}" == "1" ]] && command -v dnf >/dev/null 2>&1; then
+      printf 'selinux_semanage=installing(policycoreutils-python-utils)\n'
+      dnf -y install policycoreutils-python-utils >/dev/null
+    else
+      printf 'selinux_semanage=missing(skip)\n'
+      printf 'selinux_note=port %s may fail to bind under systemd with SELinux enforcing\n' "${PORT}"
+      return 0
+    fi
+  fi
+
+  if ! command -v semanage >/dev/null 2>&1; then
+    printf 'selinux_semanage=missing(after-install)\n'
+    printf 'selinux_note=port %s may fail to bind under systemd with SELinux enforcing\n' "${PORT}"
+    return 0
+  fi
+
+  if semanage port -l | awk -v type="${SELINUX_PORT_TYPE}" -v proto="tcp" '
+      $1 == type && $3 == proto { print $4 }' | tr ',' '\n' | grep -qx "${PORT}"; then
+    printf 'selinux_port_context=%s:%s/tcp(already)\n' "${SELINUX_PORT_TYPE}" "${PORT}"
+    return 0
+  fi
+
+  semanage port -a -t "${SELINUX_PORT_TYPE}" -p tcp "${PORT}" 2>/dev/null || \
+    semanage port -m -t "${SELINUX_PORT_TYPE}" -p tcp "${PORT}"
+  printf 'selinux_port_context=%s:%s/tcp(updated)\n' "${SELINUX_PORT_TYPE}" "${PORT}"
 }
 
 check_capability() {
@@ -105,6 +151,11 @@ EOF
 
   chmod 600 "${CONFIG}" "${HOSTKEY}"
   [[ ! -f "${HOSTKEY}.pub" ]] || chmod 644 "${HOSTKEY}.pub"
+
+  if [[ "$(selinux_mode)" != "Disabled" ]] && command -v chcon >/dev/null 2>&1; then
+    chcon -t sshd_key_t "${HOSTKEY}" >/dev/null 2>&1 || true
+    [[ ! -f "${HOSTKEY}.pub" ]] || chcon -t sshd_key_t "${HOSTKEY}.pub" >/dev/null 2>&1 || true
+  fi
 }
 
 validate_config() {
@@ -126,8 +177,8 @@ ConditionPathExists=${CONFIG}
 
 [Service]
 Type=simple
-ExecStartPre=${SSHD} -t -f ${CONFIG} -E ${LOG_FILE}
-ExecStart=${SSHD} -D -f ${CONFIG} -E ${LOG_FILE}
+ExecStartPre=${SSHD} -t -f ${CONFIG}
+ExecStart=${SSHD} -D -f ${CONFIG}
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=2s
@@ -285,6 +336,7 @@ install_service() {
   write_config
   validate_config
   write_systemd_unit
+  ensure_selinux_port_context
 
   stop_pid_file_listener
   systemctl daemon-reload

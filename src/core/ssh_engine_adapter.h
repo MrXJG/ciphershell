@@ -28,6 +28,7 @@ struct SftpExecutionResult {
 };
 
 enum class GmHostSignaturePolicy {
+  Auto,
   Strict,
   CompatibilityBypass,
 };
@@ -70,6 +71,7 @@ class SshEngineAdapter {
     bool compatible = false;
     bool algorithm_mismatch = false;
     bool transport_reachable = false;
+    bool compatibility_bypass_required = false;
     QString stderr_text;
     int exit_code = -1;
   };
@@ -104,8 +106,11 @@ class SshEngineAdapter {
       const ConnectionProfile& profile,
       const SessionSecrets& secrets) const;
 
-  AskPassMaterial prepareAskPass(const SessionSecrets& secrets) const;
-  QProcessEnvironment runtimeEnvironment() const;
+  AskPassMaterial prepareAskPass(
+      const SessionSecrets& secrets,
+      GmHostSignaturePolicy policy = GmHostSignaturePolicy::Auto) const;
+  QProcessEnvironment runtimeEnvironment(
+      GmHostSignaturePolicy policy = GmHostSignaturePolicy::Auto) const;
 
   static QString resolveBinary(const QString& candidate_path, const QString& fallback_name);
 
@@ -115,7 +120,7 @@ class SshEngineAdapter {
   QString legacy_sftp_binary_path_;
   QString known_hosts_path_;
   AuditLogger* audit_logger_ = nullptr;
-  GmHostSignaturePolicy gm_host_signature_policy_ = GmHostSignaturePolicy::Strict;
+  GmHostSignaturePolicy gm_host_signature_policy_ = GmHostSignaturePolicy::Auto;
   mutable QHash<QString, EnginePreference> engine_preference_cache_;
 };
 

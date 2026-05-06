@@ -21,11 +21,13 @@
 #include <QPushButton>
 #include <QResource>
 #include <QStandardPaths>
+#include <QStackedWidget>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 #include <QWidget>
 
 #include <cassert>
@@ -46,6 +48,46 @@ QStringList localTerminalTestArguments(const QString& command) {
 #else
   return {QStringLiteral("-lc"), command};
 #endif
+}
+
+QString runLocalTerminalCommand(
+    const QString& command,
+    const QString& test_name,
+    AuditLogger* audit_logger = nullptr,
+    AuditLevel audit_level = AuditLevel::Minimal) {
+  ConnectionProfile profile;
+  profile.name = test_name;
+  profile.host = QStringLiteral("127.0.0.1");
+  profile.username = QStringLiteral("tester");
+  profile.audit_level = audit_level;
+
+  SshLaunchPlan launch_plan;
+  launch_plan.ok = true;
+  launch_plan.program = localTerminalTestProgram();
+  launch_plan.arguments = localTerminalTestArguments(command);
+  launch_plan.environment = QProcessEnvironment::systemEnvironment();
+  launch_plan.selected_mode = AlgorithmMode::StandardOnly;
+
+  TerminalSessionWidget terminal(
+      test_name,
+      profile,
+      SessionSecrets{},
+      launch_plan,
+      audit_logger);
+
+  bool closed = false;
+  QEventLoop loop;
+  QObject::connect(&terminal, &TerminalSessionWidget::sessionClosed, &loop, [&]() {
+    closed = true;
+    loop.quit();
+  });
+  QTimer::singleShot(5000, &loop, &QEventLoop::quit);
+  loop.exec();
+  assert(closed);
+
+  auto* output = terminal.findChild<QPlainTextEdit*>(QStringLiteral("terminalOutputView"));
+  assert(output != nullptr);
+  return output->toPlainText();
 }
 
 void test_profile_editor_save_credential_location() {
@@ -80,10 +122,47 @@ void test_visual_font_stack_prefers_platform_native_fonts() {
   assert(!style_sheet.contains(QStringLiteral("Geist Mono")));
 }
 
+void test_profile_list_style_does_not_hide_all_list_text() {
+  MainWindow window;
+  const auto style_sheet = qApp->styleSheet();
+  assert(style_sheet.contains(QStringLiteral("QListWidget#profileList::item {")));
+  assert(style_sheet.contains(QStringLiteral("QListWidget#profileList::item:selected {")));
+  assert(style_sheet.contains(QStringLiteral("QListWidget::item {\n  color: #111318;")));
+  assert(style_sheet.contains(QStringLiteral("QListWidget::item:selected {\n  color: #111318;")));
+  assert(!style_sheet.contains(QStringLiteral("QListWidget::item {\n  min-height: 64px")));
+  assert(
+      !style_sheet.contains(
+          QStringLiteral("QListWidget::item:selected {\n  background: transparent;\n  color: transparent;")));
+}
+
 void test_combo_arrow_resource_is_available() {
   QResource arrow(QStringLiteral(":/icons/icons/chevron-down.png"));
   assert(arrow.isValid());
   assert(arrow.size() > 0);
+}
+
+void test_terminal_web_resources_are_available() {
+  const QStringList resource_paths{
+      QStringLiteral(":/terminal/terminal.html"),
+      QStringLiteral(":/terminal/xterm.css"),
+      QStringLiteral(":/terminal/xterm.js"),
+      QStringLiteral(":/terminal/xterm-addon-fit.js"),
+  };
+
+  for (const auto& path : resource_paths) {
+    QResource resource(path);
+    assert(resource.isValid());
+    assert(resource.size() > 0);
+  }
+
+  QFile html_file(QStringLiteral(":/terminal/terminal.html"));
+  assert(html_file.open(QIODevice::ReadOnly | QIODevice::Text));
+  const auto html = QString::fromUtf8(html_file.readAll());
+  assert(html.contains(QStringLiteral("qrc:///terminal/xterm.js")));
+  assert(html.contains(QStringLiteral("qrc:///terminal/xterm-addon-fit.js")));
+  assert(html.contains(QStringLiteral("convertEol: true")));
+  assert(html.contains(QStringLiteral("id=\"terminal-shell\"")));
+  assert(html.contains(QStringLiteral("document.fonts.ready")));
 }
 
 void test_checkbox_checkmark_resource_is_png() {
@@ -232,8 +311,21 @@ void test_session_center_stays_compact() {
 
   auto* left_panel = window.findChild<QWidget*>(QStringLiteral("leftPanel"));
   assert(left_panel != nullptr);
-  assert(left_panel->minimumWidth() == 200);
-  assert(left_panel->maximumWidth() == 240);
+  assert(left_panel->minimumWidth() == 230);
+  assert(left_panel->maximumWidth() == 290);
+
+  auto* nav_stack = window.findChild<QStackedWidget*>(QStringLiteral("leftNavigationStack"));
+  assert(nav_stack != nullptr);
+  assert(nav_stack->count() == 2);
+  assert(nav_stack->currentIndex() == 0);
+
+  auto* expand_button = window.findChild<QToolButton*>(QStringLiteral("leftNavExpandButton"));
+  assert(expand_button != nullptr);
+  assert(expand_button->text() == QStringLiteral("›"));
+
+  auto* collapse_button = window.findChild<QToolButton*>(QStringLiteral("leftNavCollapseButton"));
+  assert(collapse_button != nullptr);
+  assert(collapse_button->text() == QStringLiteral("‹"));
 }
 
 void test_terminal_uses_inline_terminal_surface() {
@@ -266,40 +358,12 @@ void test_terminal_backend_runs_local_command_and_audits_output() {
   QTemporaryDir temp_dir;
   assert(temp_dir.isValid());
   AuditLogger audit_logger(temp_dir.filePath(QStringLiteral("audit.jsonl")));
-
-  ConnectionProfile profile;
-  profile.name = QStringLiteral("本地终端测试");
-  profile.host = QStringLiteral("127.0.0.1");
-  profile.username = QStringLiteral("tester");
-  profile.audit_level = AuditLevel::Normal;
-
-  SshLaunchPlan launch_plan;
-  launch_plan.ok = true;
-  launch_plan.program = localTerminalTestProgram();
-  launch_plan.arguments = localTerminalTestArguments(QStringLiteral("echo TERMINAL_WIDGET_OK"));
-  launch_plan.environment = QProcessEnvironment::systemEnvironment();
-  launch_plan.selected_mode = AlgorithmMode::StandardOnly;
-
-  TerminalSessionWidget terminal(
+  const auto text = runLocalTerminalCommand(
+      QStringLiteral("echo TERMINAL_WIDGET_OK"),
       QStringLiteral("本地终端测试"),
-      profile,
-      SessionSecrets{},
-      launch_plan,
-      &audit_logger);
-
-  bool closed = false;
-  QEventLoop loop;
-  QObject::connect(&terminal, &TerminalSessionWidget::sessionClosed, &loop, [&]() {
-    closed = true;
-    loop.quit();
-  });
-  QTimer::singleShot(4000, &loop, &QEventLoop::quit);
-  loop.exec();
-
-  assert(closed);
-  auto* output = terminal.findChild<QPlainTextEdit*>(QStringLiteral("terminalOutputView"));
-  assert(output != nullptr);
-  assert(output->toPlainText().contains(QStringLiteral("TERMINAL_WIDGET_OK")));
+      &audit_logger,
+      AuditLevel::Normal);
+  assert(text.contains(QStringLiteral("TERMINAL_WIDGET_OK")));
 
   QFile audit_file(audit_logger.logFilePath());
   assert(audit_file.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -310,42 +374,51 @@ void test_terminal_backend_runs_local_command_and_audits_output() {
 }
 
 void test_terminal_crlf_layout_uses_separate_lines() {
-  ConnectionProfile profile;
-  profile.name = QStringLiteral("本地排版测试");
-  profile.host = QStringLiteral("127.0.0.1");
-  profile.username = QStringLiteral("tester");
-  profile.audit_level = AuditLevel::Minimal;
-
-  SshLaunchPlan launch_plan;
-  launch_plan.ok = true;
-  launch_plan.program = localTerminalTestProgram();
-  launch_plan.arguments = localTerminalTestArguments(
-      QStringLiteral("echo PROMPT# ls&&echo file-a file-b&&echo PROMPT#"));
-  launch_plan.environment = QProcessEnvironment::systemEnvironment();
-  launch_plan.selected_mode = AlgorithmMode::StandardOnly;
-
-  TerminalSessionWidget terminal(
-      QStringLiteral("本地排版测试"),
-      profile,
-      SessionSecrets{},
-      launch_plan,
-      nullptr);
-
-  bool closed = false;
-  QEventLoop loop;
-  QObject::connect(&terminal, &TerminalSessionWidget::sessionClosed, &loop, [&]() {
-    closed = true;
-    loop.quit();
-  });
-  QTimer::singleShot(4000, &loop, &QEventLoop::quit);
-  loop.exec();
-
-  assert(closed);
-  auto* output = terminal.findChild<QPlainTextEdit*>(QStringLiteral("terminalOutputView"));
-  assert(output != nullptr);
-  const auto text = output->toPlainText();
+  const auto text = runLocalTerminalCommand(
+      QStringLiteral("echo PROMPT# ls&&echo file-a file-b&&echo PROMPT#"),
+      QStringLiteral("本地排版测试"));
   assert(text.contains(QStringLiteral("PROMPT# ls\nfile-a file-b\nPROMPT#")));
   assert(!text.contains(QStringLiteral("PROMPT# lsfile-a")));
+}
+
+void test_terminal_ansi_clear_screen_and_home_redraw() {
+  const auto text = runLocalTerminalCommand(
+      QStringLiteral(
+          "printf 'OLD-LINE\\nSECOND-LINE\\n'; printf '\\033[H\\033[2J'; printf 'NEW-HEAD\\nNEW-BODY\\n'"),
+      QStringLiteral("本地 ANSI 清屏测试"));
+
+  assert(text.contains(QStringLiteral("NEW-HEAD\nNEW-BODY")));
+  assert(!text.contains(QStringLiteral("OLD-LINE")));
+}
+
+void test_terminal_ansi_absolute_position_and_save_restore_cursor() {
+  const auto text = runLocalTerminalCommand(
+      QStringLiteral(
+          "printf '111111\\n222222\\n333333'; printf '\\033[1;3HXY'; printf '\\033[s'; printf '12'; printf '\\033[u'; printf 'Z\\n'"),
+      QStringLiteral("本地 ANSI 定位测试"));
+
+  assert(text.contains(QStringLiteral("11XYZ2")));
+  assert(text.contains(QStringLiteral("\n222222\n333333")));
+}
+
+void test_terminal_repaint_frames_do_not_accumulate_to_bottom() {
+  const auto text = runLocalTerminalCommand(
+      QStringLiteral(
+          "for i in 1 2 3; do printf '\\033[H\\033[2J'; printf 'FRAME-%s\\nL2\\nL3\\n' \"$i\"; done"),
+      QStringLiteral("本地全屏重绘测试"));
+
+  assert(text.contains(QStringLiteral("FRAME-3")));
+  assert(!text.contains(QStringLiteral("FRAME-1")));
+  assert(!text.contains(QStringLiteral("FRAME-2")));
+}
+
+void test_terminal_ansi_charset_designator_is_not_rendered() {
+  const auto text = runLocalTerminalCommand(
+      QStringLiteral("printf 'A\\033(BC\\n'"),
+      QStringLiteral("本地 ANSI 字符集切换测试"));
+
+  assert(text.contains(QStringLiteral("AC")));
+  assert(!text.contains(QStringLiteral("ABC")));
 }
 
 void test_sftp_context_can_be_cleared() {
@@ -373,7 +446,9 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   test_profile_editor_save_credential_location();
   test_visual_font_stack_prefers_platform_native_fonts();
+  test_profile_list_style_does_not_hide_all_list_text();
   test_combo_arrow_resource_is_available();
+  test_terminal_web_resources_are_available();
   test_checkbox_checkmark_resource_is_png();
   test_audit_log_view_shows_log_file_path();
   test_session_profile_dialog_uses_compact_tabs();
@@ -383,6 +458,10 @@ int main(int argc, char** argv) {
   test_terminal_uses_inline_terminal_surface();
   test_terminal_backend_runs_local_command_and_audits_output();
   test_terminal_crlf_layout_uses_separate_lines();
+  test_terminal_ansi_clear_screen_and_home_redraw();
+  test_terminal_ansi_absolute_position_and_save_restore_cursor();
+  test_terminal_repaint_frames_do_not_accumulate_to_bottom();
+  test_terminal_ansi_charset_designator_is_not_rendered();
   test_sftp_context_can_be_cleared();
   return 0;
 }

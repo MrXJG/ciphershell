@@ -12,9 +12,11 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMainWindow>
-#include <QPushButton>
+#include <QPoint>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QTabWidget>
+#include <QToolButton>
 #include <QVector>
 #include <optional>
 
@@ -43,13 +45,22 @@ class MainWindow : public QMainWindow {
   void onConnect();
   void onOpenSftpTool();
   void onOpenAuditLog();
-  void applyGmHostSignaturePolicy(bool compatibility_bypass);
+  void applyGmHostSignaturePolicy(GmHostSignaturePolicy policy);
 
   void applyProfileFilter(const QString& keyword);
   void updateConnectionStatus(const QString& text);
   void applyVisualStyle();
   void restoreUiState();
   void persistUiState() const;
+  void refreshProfileCardStates();
+  void refreshContextPanels();
+  void showProfileContextMenu(const QPoint& pos);
+  void showTerminalTabContextMenu(const QPoint& pos);
+  void updatePaneLayoutForSessionState();
+  TerminalSessionWidget* terminalSessionAtTab(int idx) const;
+  bool startTerminalSession(ConnectionProfile profile, SessionSecrets secrets);
+  void duplicateTerminalSession(int idx);
+  void exportTerminalSessionContent(int idx);
 
   bool editProfile(int row, bool creating_new);
   std::optional<ConnectionProfile> selectedProfile() const;
@@ -58,7 +69,6 @@ class MainWindow : public QMainWindow {
   int findProfileByName(const QString& name) const;
   void ensureToolWindows();
   void closeTerminalTab(int idx);
-  void installTerminalTabCloseButton(int idx, QWidget* tab_widget);
   void updateActiveTerminalStatus();
   TerminalSessionWidget* currentTerminalSession() const;
   bool syncSftpPanelToCurrentTerminal();
@@ -71,6 +81,10 @@ class MainWindow : public QMainWindow {
   SshEngineAdapter ssh_adapter_;
 
   QSplitter* main_splitter_ = nullptr;
+  QWidget* left_panel_ = nullptr;
+  QStackedWidget* left_navigation_stack_ = nullptr;
+  QToolButton* left_nav_expand_button_ = nullptr;
+  QToolButton* left_nav_collapse_button_ = nullptr;
 
   QListWidget* profile_list_ = nullptr;
   QLineEdit* search_edit_ = nullptr;
@@ -82,16 +96,19 @@ class MainWindow : public QMainWindow {
   QDialog* audit_window_ = nullptr;
 
   QLabel* connection_status_label_ = nullptr;
+  QLabel* session_count_label_ = nullptr;
+  QLabel* footer_mode_label_ = nullptr;
+  QLabel* footer_sessions_label_ = nullptr;
 
-  QPushButton* connect_button_ = nullptr;
-  QPushButton* edit_button_ = nullptr;
-  QPushButton* new_button_ = nullptr;
-  QPushButton* delete_button_ = nullptr;
   QAction* edit_action_ = nullptr;
   QAction* open_sftp_action_ = nullptr;
   QAction* open_audit_action_ = nullptr;
+  QAction* auto_hostsig_action_ = nullptr;
   QAction* strict_hostsig_action_ = nullptr;
   QAction* compat_hostsig_action_ = nullptr;
+
+  bool auto_collapsed_navigation_ = false;
+  bool navigation_forced_expanded_ = false;
 };
 
 }  // namespace gmssh

@@ -6,4 +6,10 @@
     <file>icons/chevron-down.png</file>
     <file>icons/tab-close.svg</file>
   </qresource>
+  <qresource prefix="/terminal">
+    <file alias="terminal.html">terminal/terminal.html</file>
+    <file alias="xterm.css">terminal/xterm.css</file>
+    <file alias="xterm.js">terminal/xterm.js</file>
+    <file alias="xterm-addon-fit.js">terminal/xterm-addon-fit.js</file>
+  </qresource>
 </RCC>

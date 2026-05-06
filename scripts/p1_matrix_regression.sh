@@ -12,7 +12,9 @@ LEGACY_SFTP="${GMSSH_LEGACY_SFTP:-${ROOT_DIR}/build/stage/bin/sftp}"
 
 PROFILES_PATH="${GMSSH_PROFILES_PATH:-${HOME}/Library/Preferences/internal/gmssh-client/profiles.json}"
 CREDENTIALS_PATH="${GMSSH_CREDENTIALS_PATH:-${HOME}/Library/Preferences/internal/gmssh-client/credentials.json}"
-KNOWN_HOSTS_PATH="${GMSSH_MATRIX_KNOWN_HOSTS:-${OUT_DIR}/known_hosts}"
+# Keep matrix known_hosts on an ASCII path by default.
+# Some OpenSSH builds in GM environments mis-handle non-ASCII UserKnownHostsFile paths.
+KNOWN_HOSTS_PATH="${GMSSH_MATRIX_KNOWN_HOSTS:-/tmp/gmssh-matrix-known_hosts-$(date +%Y%m%d-%H%M%S)}"
 REPORT_PATH="${OUT_DIR}/p1-matrix-report.json"
 
 mkdir -p "${OUT_DIR}"
@@ -82,5 +84,9 @@ cmake --build "${BUILD_DIR}" --target gmssh_p1_matrix -j
   --legacy-ssh "${LEGACY_SSH}" \
   --legacy-sftp "${LEGACY_SFTP}" \
   --output "${REPORT_PATH}"
+
+if [[ -f "${KNOWN_HOSTS_PATH}" ]]; then
+  cp -f "${KNOWN_HOSTS_PATH}" "${OUT_DIR}/known_hosts.snapshot"
+fi
 
 echo "report=${REPORT_PATH}"

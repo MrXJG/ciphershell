@@ -16,6 +16,7 @@ set(CMAKE_AUTORCC ON)
 option(GMSSH_BUILD_GUI "Build Qt GUI client" ON)
 option(GMSSH_BUILD_TESTS "Build unit tests" ON)
 option(GMSSH_ENABLE_QTERMWIDGET "Enable QTermWidget integration when available" ON)
+option(GMSSH_ENABLE_WEB_TERMINAL "Enable embedded web terminal (xterm.js via Qt WebEngine)" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -24,6 +25,9 @@ find_package(Qt6 REQUIRED COMPONENTS Core Network)
 
 if(GMSSH_BUILD_GUI)
   find_package(Qt6 REQUIRED COMPONENTS Widgets)
+  if(GMSSH_ENABLE_WEB_TERMINAL)
+    find_package(Qt6 QUIET COMPONENTS WebEngineWidgets WebChannel)
+  endif()
 endif()
 
 if(GMSSH_ENABLE_QTERMWIDGET)
@@ -93,6 +97,14 @@ if(GMSSH_BUILD_GUI)
     PRIVATE gmssh_core Qt6::Widgets
   )
 
+  if(GMSSH_ENABLE_WEB_TERMINAL AND TARGET Qt6::WebEngineWidgets AND TARGET Qt6::WebChannel)
+    target_link_libraries(gmssh_client PRIVATE Qt6::WebEngineWidgets Qt6::WebChannel)
+    target_compile_definitions(gmssh_client PRIVATE GMSSH_HAS_WEBTERMINAL=1)
+    message(STATUS "Embedded web terminal enabled (Qt WebEngine + WebChannel).")
+  elseif(GMSSH_ENABLE_WEB_TERMINAL)
+    message(WARNING "Embedded web terminal requested but Qt WebEngine/WebChannel not found; falling back to legacy terminal renderer.")
+  endif()
+
   if(UNIX AND NOT APPLE)
     target_link_libraries(gmssh_client PRIVATE util)
   endif()
@@ -110,6 +122,19 @@ if(GMSSH_BUILD_GUI)
     MACOSX_BUNDLE_ICON_FILE "gmssh.icns"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
   )
+
+  if(APPLE)
+    add_custom_command(TARGET gmssh_client POST_BUILD
+      # Keep the development bundle free of stale macdeployqt outputs. When
+      # developers launch the raw build artifact, it should use one Qt runtime:
+      # the build-time Homebrew Qt, not a mixed set of previously packaged
+      # frameworks and plugins left inside the .app from a packaging run.
+      COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_BUNDLE_DIR:gmssh_client>/Contents/Frameworks"
+      COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_BUNDLE_DIR:gmssh_client>/Contents/PlugIns"
+      COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_BUNDLE_DIR:gmssh_client>/Contents/Resources/qt.conf"
+      VERBATIM
+    )
+  endif()
 
   set(GMSSH_ENGINE_SUFFIX "")
   if(WIN32)

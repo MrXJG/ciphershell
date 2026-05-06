@@ -12,6 +12,8 @@
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 
+#include <cctype>
+
 namespace gmssh {
 namespace {
 
@@ -104,6 +106,64 @@ bool runSshKeygenRemove(const QString& known_hosts_path, const QString& host_spe
     return false;
   }
 
+  auto removeByLineFilter = [&]() -> bool {
+    QFile file(known_hosts_path);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+      return false;
+    }
+
+    const auto original = file.readAll();
+    file.close();
+
+    const auto lines = original.split('\n');
+    const auto needle = host_spec.toUtf8();
+    QList<QByteArray> kept_lines;
+    kept_lines.reserve(lines.size());
+    bool changed = false;
+
+    for (const auto& line : lines) {
+      const auto trimmed = line.trimmed();
+      bool remove_line = false;
+
+      if (!trimmed.isEmpty() && !trimmed.startsWith('#') && !trimmed.startsWith('|')) {
+        int ws_index = 0;
+        while (ws_index < line.size() &&
+               !std::isspace(static_cast<unsigned char>(line.at(ws_index)))) {
+          ++ws_index;
+        }
+        const auto host_field = line.left(ws_index);
+        for (const auto& token : host_field.split(',')) {
+          if (token == needle) {
+            remove_line = true;
+            break;
+          }
+        }
+      }
+
+      if (remove_line) {
+        changed = true;
+        continue;
+      }
+      kept_lines.push_back(line);
+    }
+
+    if (!changed) {
+      return false;
+    }
+
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+      return false;
+    }
+    for (int i = 0; i < kept_lines.size(); ++i) {
+      file.write(kept_lines.at(i));
+      if (i + 1 < kept_lines.size()) {
+        file.write("\n");
+      }
+    }
+    file.close();
+    return true;
+  };
+
   QProcess process;
   process.setProgram(QStringLiteral("ssh-keygen"));
   process.setArguments({
@@ -114,10 +174,15 @@ bool runSshKeygenRemove(const QString& known_hosts_path, const QString& host_spe
   });
   process.start();
   if (!process.waitForFinished(5000)) {
-    return false;
+    process.kill();
+    process.waitForFinished(1000);
+    return removeByLineFilter();
   }
 
-  return process.exitCode() == 0;
+  if (process.exitCode() == 0) {
+    return true;
+  }
+  return removeByLineFilter();
 }
 
 bool executableAvailable(const QString& program) {
@@ -159,14 +224,18 @@ bool sftpOutputIndicatesCommandFailure(const QString& output) {
 QString enginePreferenceKey(
     const ConnectionProfile& profile,
     GmHostSignaturePolicy policy) {
+  QString policy_key = QStringLiteral("auto");
+  if (policy == GmHostSignaturePolicy::Strict) {
+    policy_key = QStringLiteral("strict");
+  } else if (policy == GmHostSignaturePolicy::CompatibilityBypass) {
+    policy_key = QStringLiteral("compat");
+  }
   return QStringLiteral("%1|%2|%3|%4|%5")
       .arg(profile.host)
       .arg(profile.port)
       .arg(profile.username)
       .arg(toString(profile.algorithm_mode))
-      .arg(policy == GmHostSignaturePolicy::CompatibilityBypass
-               ? QStringLiteral("compat")
-               : QStringLiteral("strict"));
+      .arg(policy_key);
 }
 
 QString modernToLegacyFallbackReason(const QString& stderr_text) {
@@ -214,7 +283,9 @@ QString sftpControlPath(
                                      : QStringLiteral("standard"))
                             .arg(policy == GmHostSignaturePolicy::CompatibilityBypass
                                      ? QStringLiteral("old-gm-adaptation")
-                                     : QStringLiteral("strict"));
+                                     : (policy == GmHostSignaturePolicy::Strict
+                                            ? QStringLiteral("strict")
+                                            : QStringLiteral("auto")));
   const auto digest =
       QCryptographicHash::hash(material.toUtf8(), QCryptographicHash::Sha256).toHex().left(24);
   return QDir::temp().filePath(QStringLiteral("gmssh-sftp-%1").arg(QString::fromLatin1(digest)));
@@ -292,11 +363,11 @@ GmHostSignaturePolicy SshEngineAdapter::gmHostSignaturePolicy() const {
   return gm_host_signature_policy_;
 }
 
-QProcessEnvironment SshEngineAdapter::runtimeEnvironment() const {
+QProcessEnvironment SshEngineAdapter::runtimeEnvironment(GmHostSignaturePolicy policy) const {
   auto env = QProcessEnvironment::systemEnvironment();
   env.insert(
       QString::fromLatin1(kEcgmHostSigBypassEnv),
-      gm_host_signature_policy_ == GmHostSignaturePolicy::CompatibilityBypass
+      policy == GmHostSignaturePolicy::CompatibilityBypass
           ? QStringLiteral("1")
           : QStringLiteral("0"));
   return env;
@@ -360,7 +431,7 @@ SshEngineAdapter::ProbeOutcome SshEngineAdapter::probeCandidate(
             : ssh_program);
     process.setArguments(
         SshCommandBuilder::buildProbeArgs(profile, known_hosts_path_, candidate));
-    process.setProcessEnvironment(runtimeEnvironment());
+    process.setProcessEnvironment(runtimeEnvironment(gm_host_signature_policy_));
     process.start();
 
     if (!process.waitForStarted(6000)) {
@@ -392,6 +463,7 @@ SshEngineAdapter::ProbeOutcome SshEngineAdapter::probeCandidate(
             QStringLiteral("\nstrict_policy_blocked_compatibility_bypass unexpected internal error"));
         return outcome;
       }
+      outcome.compatibility_bypass_required = true;
       outcome.compatible = true;
       return outcome;
     }
@@ -500,9 +572,10 @@ SshEngineAdapter::IdentityMaterial SshEngineAdapter::prepareIdentityMaterial(
 }
 
 SshEngineAdapter::AskPassMaterial SshEngineAdapter::prepareAskPass(
-    const SessionSecrets& secrets) const {
+    const SessionSecrets& secrets,
+    GmHostSignaturePolicy policy) const {
   AskPassMaterial material;
-  material.environment = runtimeEnvironment();
+  material.environment = runtimeEnvironment(policy);
 
   if (secrets.password.isEmpty()) {
     return material;
@@ -547,6 +620,7 @@ SshLaunchPlan SshEngineAdapter::prepareLaunch(
 
   auto selected_ssh = modern_ssh;
   auto selected_sftp = modern_sftp;
+  auto effective_hostsig_policy = gm_host_signature_policy_;
   const auto cache_key = enginePreferenceKey(profile, gm_host_signature_policy_);
   if (profile.algorithm_mode != AlgorithmMode::StandardOnly &&
       engine_preference_cache_.contains(cache_key)) {
@@ -672,13 +746,23 @@ SshLaunchPlan SshEngineAdapter::prepareLaunch(
     }
   }
 
+  if (candidate == AlgorithmCandidate::Gm &&
+      gm_host_signature_policy_ == GmHostSignaturePolicy::Auto) {
+    const auto gm_probe = probeCandidate(profile, AlgorithmCandidate::Gm, selected_ssh);
+    if (gm_probe.compatibility_bypass_required) {
+      effective_hostsig_policy = GmHostSignaturePolicy::CompatibilityBypass;
+    } else {
+      effective_hostsig_policy = GmHostSignaturePolicy::Strict;
+    }
+  }
+
   const auto identity = prepareIdentityMaterial(profile, secrets);
   if (!identity.ok) {
     plan.error = identity.error;
     return plan;
   }
 
-  const auto ask_pass = prepareAskPass(secrets);
+  const auto ask_pass = prepareAskPass(secrets, effective_hostsig_policy);
 
   plan.program = selected_ssh;
   plan.arguments = SshCommandBuilder::buildSessionArgs(
@@ -695,7 +779,7 @@ SshLaunchPlan SshEngineAdapter::prepareLaunch(
   plan.fallback_used = fallback_used;
   plan.fallback_reason = reason;
   plan.gm_hostsig_compatibility_bypass =
-      gm_host_signature_policy_ == GmHostSignaturePolicy::CompatibilityBypass;
+      effective_hostsig_policy == GmHostSignaturePolicy::CompatibilityBypass;
   plan.engine_fallback_used = engine_fallback_used;
   plan.engine_fallback_reason = engine_fallback_reason;
   plan.engine_fallback_from = engine_fallback_from;
@@ -740,6 +824,7 @@ SftpExecutionResult SshEngineAdapter::runSftpBatch(
 
   auto selected_ssh = modern_ssh;
   auto selected_sftp = modern_sftp;
+  auto effective_hostsig_policy = gm_host_signature_policy_;
   const auto cache_key = enginePreferenceKey(profile, gm_host_signature_policy_);
   if (profile.algorithm_mode != AlgorithmMode::StandardOnly &&
       engine_preference_cache_.contains(cache_key)) {
@@ -881,6 +966,16 @@ SftpExecutionResult SshEngineAdapter::runSftpBatch(
 
   populateResultContext();
 
+  if (candidate == AlgorithmCandidate::Gm &&
+      gm_host_signature_policy_ == GmHostSignaturePolicy::Auto) {
+    const auto gm_probe = probeCandidate(profile, AlgorithmCandidate::Gm, selected_ssh);
+    if (gm_probe.compatibility_bypass_required) {
+      effective_hostsig_policy = GmHostSignaturePolicy::CompatibilityBypass;
+    } else {
+      effective_hostsig_policy = GmHostSignaturePolicy::Strict;
+    }
+  }
+
   if (audit_logger_ != nullptr && engine_fallback_used) {
     audit_logger_->logEvent(
         QStringLiteral("sftp_engine_fallback"),
@@ -905,7 +1000,7 @@ SftpExecutionResult SshEngineAdapter::runSftpBatch(
     return result;
   }
 
-  const auto ask_pass = prepareAskPass(secrets);
+  const auto ask_pass = prepareAskPass(secrets, effective_hostsig_policy);
 
   QProcess process;
   process.setProgram(selected_sftp);
@@ -916,7 +1011,7 @@ SftpExecutionResult SshEngineAdapter::runSftpBatch(
       selected_ssh,
       identity.identity_file,
       identity.certificate_file,
-      sftpControlPath(profile, selected_ssh, candidate, gm_host_signature_policy_),
+      sftpControlPath(profile, selected_ssh, candidate, effective_hostsig_policy),
       QString()));
   process.setProcessEnvironment(ask_pass.environment);
 
@@ -948,7 +1043,7 @@ SftpExecutionResult SshEngineAdapter::runSftpBatch(
       result.ok = false;
       result.error = QStringLiteral("SFTP 命令执行失败，请查看上方输出。");
     }
-    if (gm_host_signature_policy_ == GmHostSignaturePolicy::Strict &&
+    if (effective_hostsig_policy == GmHostSignaturePolicy::Strict &&
         stderrSuggestsCompatibility(result.std_err)) {
       result.ok = false;
       result.error = QStringLiteral(

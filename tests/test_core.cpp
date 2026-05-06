@@ -241,6 +241,43 @@ void test_engine_fallback_from_modern_kex_internal_error() {
   assert(!plan.fallback_used);
 }
 
+void test_known_hosts_repair_handles_sm2_lines() {
+  QTemporaryDir temp;
+  assert(temp.isValid());
+
+  const auto known_hosts_path = temp.filePath(QStringLiteral("known_hosts"));
+  QFile known_hosts(known_hosts_path);
+  assert(known_hosts.open(QIODevice::WriteOnly | QIODevice::Text));
+  known_hosts.write(
+      "10.0.13.1 sm2 "
+      "AAAAA3NtMgAAAANzbTIAAABBBFJFo5vt8NrQ7qMvzDioKde9IJ00OKeyMdD3s2jInm1HX6jEo3pHfNljTtgEqA3SaSKU+qEkH3wefm8Z+o3Rl9o=\n");
+  known_hosts.write(
+      "[10.0.13.2]:2222 sm2 "
+      "AAAAA3NtMgAAAANzbTIAAABBBB7XRHt1w0sNElw94cdkK/oekLVIp9xMLd3LqPa9GIyhH34LAKI4bp4QEk6+HNmY/TISFrhMtDfgNFGyu0Cz0No=\n");
+  known_hosts.write(
+      "10.0.13.2 ssh-ed25519 "
+      "AAAAC3NzaC1lZDI1NTE5AAAAIDyC+M/puTSGwbl2VncIrXn62MioexP/wc7n5KD6PJ/9\n");
+  known_hosts.close();
+
+  SshEngineAdapter adapter;
+  adapter.setKnownHostsPath(known_hosts_path);
+
+  ConnectionProfile profile;
+  profile.host = QStringLiteral("10.0.13.2");
+  profile.port = 2222;
+
+  assert(adapter.clearHostKeyEntries(profile));
+
+  QFile verify(known_hosts_path);
+  assert(verify.open(QIODevice::ReadOnly | QIODevice::Text));
+  const auto text = QString::fromUtf8(verify.readAll());
+  verify.close();
+
+  assert(!text.contains(QStringLiteral("[10.0.13.2]:2222")));
+  assert(!text.contains(QStringLiteral("10.0.13.2 ssh-ed25519")));
+  assert(text.contains(QStringLiteral("10.0.13.1 sm2")));
+}
+
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   test_profile_roundtrip();
@@ -248,5 +285,6 @@ int main(int argc, char** argv) {
   test_forwarding_builder();
   test_hostsig_policy_plumbing();
   test_engine_fallback_from_modern_kex_internal_error();
+  test_known_hosts_repair_handles_sm2_lines();
   return 0;
 }
