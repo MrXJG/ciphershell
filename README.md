@@ -1,5 +1,7 @@
 # CipherShell (V1)
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Qt/C++ SSH GUI client with GM-aware algorithm policy and OpenSSH engine adapter.
 
 ## Implemented capabilities
