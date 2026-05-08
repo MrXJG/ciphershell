@@ -2,11 +2,26 @@
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODERN_SSH="${GMSSH_MODERN_SSH:-${ROOT_DIR}/build/bin/ssh}"
-LEGACY_SSH="${GMSSH_LEGACY_SSH:-${ROOT_DIR}/build/stage/bin/ssh}"
+BUILD_DIR="${GMSSH_BUILD_DIR:-${ROOT_DIR}/build}"
+APP_BIN_DIR="${BUILD_DIR}/CipherShell.app/Contents/MacOS/bin"
+
+resolve_engine_path() {
+  local fallback="$1"
+  shift
+  for candidate in "$@"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s' "${fallback}"
+}
+
+MODERN_SSH="${GMSSH_MODERN_SSH:-$(resolve_engine_path "${ROOT_DIR}/bin/ssh" "${ROOT_DIR}/bin/ssh" "${APP_BIN_DIR}/ssh" "${BUILD_DIR}/bin/ssh")}"
+LEGACY_SSH="${GMSSH_LEGACY_SSH:-$(resolve_engine_path "${ROOT_DIR}/bin/ssh-legacy-ecgm" "${ROOT_DIR}/bin/ssh-legacy-ecgm" "${APP_BIN_DIR}/ssh-legacy-ecgm" "${BUILD_DIR}/bin/ssh-legacy-ecgm")}"
 KYLIN_HOST="${GMSSH_KYLIN_HOST:-10.0.13.1}"
 OPENEULER_HOST="${GMSSH_OPENEULER_HOST:-10.0.13.2}"
-OPENEULER_GM_PORT="${GMSSH_OPENEULER_GM_PORT:-22}"
+OPENEULER_GM_PORT="${GMSSH_OPENEULER_GM_PORT:-2222}"
 OUT_DIR="${GMSSH_REGRESSION_OUT_DIR:-${ROOT_DIR}/build/regression/$(date +%Y%m%d-%H%M%S)}"
 
 mkdir -p "${OUT_DIR}"

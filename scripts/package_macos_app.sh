@@ -52,6 +52,8 @@ repair_qt_plugin_bundle_links() {
   local plugins_dir="${app}/Contents/PlugIns"
   local qtsvg_src="/opt/homebrew/opt/qtsvg/lib/QtSvg.framework"
   local qtsvg_dst="${frameworks_dir}/QtSvg.framework"
+  local webengine_helper_contents="${frameworks_dir}/QtWebEngineCore.framework/Versions/A/Helpers/QtWebEngineProcess.app/Contents"
+  local webengine_helper="${frameworks_dir}/QtWebEngineCore.framework/Versions/A/Helpers/QtWebEngineProcess.app/Contents/MacOS/QtWebEngineProcess"
 
   rm -f \
     "${plugins_dir}/imageformats/libqpdf.dylib" \
@@ -83,6 +85,40 @@ repair_qt_plugin_bundle_links() {
       "@executable_path/../../Frameworks/libssl.3.dylib" \
       "${engine_binary}" 2>/dev/null || true
   done < <(find "${engine_dir}" -type f -perm -111 -print 2>/dev/null)
+
+  # Qt 6.11 WebEngine helper can keep Homebrew absolute framework links after
+  # macdeployqt. Rewrite them to bundle-relative paths so DMG builds are
+  # self-contained and pass strict dependency verification.
+  if [[ -x "${webengine_helper}" ]]; then
+    # QtWebEngineProcess resolves some transitive dylibs via
+    # @executable_path/../Frameworks. Ensure that path exists in the helper and
+    # points back to the app-level Frameworks directory.
+    rm -rf "${webengine_helper_contents}/Frameworks"
+    ln -s "../../../../../../" "${webengine_helper_contents}/Frameworks"
+
+    install_name_tool \
+      -change "@rpath/QtWebEngineCore.framework/Versions/A/QtWebEngineCore" \
+      "@executable_path/../../../../QtWebEngineCore" \
+      "${webengine_helper}" 2>/dev/null || true
+
+    while IFS= read -r dep; do
+      [[ "${dep}" == /opt/homebrew/* || "${dep}" == /usr/local/* ]] || continue
+      if [[ "${dep}" =~ /(Qt[^/]+)\.framework/Versions/A/([^/]+)$ ]]; then
+        local framework="${BASH_REMATCH[1]}"
+        local leaf="${BASH_REMATCH[2]}"
+        [[ "${framework}" == "${leaf}" ]] || continue
+        local replacement=""
+        if [[ "${framework}" == "QtWebEngineCore" ]]; then
+          replacement="@executable_path/../../../../QtWebEngineCore"
+        else
+          replacement="@executable_path/../../../../../../../${framework}.framework/Versions/A/${framework}"
+        fi
+        install_name_tool \
+          -change "${dep}" "${replacement}" \
+          "${webengine_helper}" 2>/dev/null || true
+      fi
+    done < <(otool -L "${webengine_helper}" 2>/dev/null | tail -n +2 | awk '{print $1}')
+  fi
 }
 
 verify_bundle_links() {

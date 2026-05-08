@@ -82,6 +82,13 @@ class TerminalSessionWidget : public QWidget {
   void cleanup();
   void scrollToBottom();
   bool shouldAutoRetryTransientNetworkFailure(int exit_code) const;
+#if defined(GMSSH_HAS_WEBTERMINAL)
+  void beginWebTerminalBootstrap();
+  void scheduleWebTerminalBootstrapTimeout();
+  void handleWebTerminalLoadFinished(bool ok);
+  void handleWebTerminalBootstrapTimeout();
+  void failWebTerminalBootstrap(const QString& reason);
+#endif
 
   QString session_name_;
   QString session_audit_id_;
@@ -98,6 +105,8 @@ class TerminalSessionWidget : public QWidget {
   QObject* web_terminal_bridge_ = nullptr;
   bool use_web_terminal_ = false;
   bool web_terminal_ready_ = false;
+  int web_terminal_bootstrap_attempt_ = 0;
+  QTimer* web_terminal_bootstrap_timer_ = nullptr;
   QStringList pending_web_output_;
 #endif
   QSocketNotifier* pty_read_notifier_ = nullptr;

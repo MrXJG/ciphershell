@@ -28,6 +28,7 @@
 #include <QVBoxLayout>
 #if defined(GMSSH_HAS_WEBTERMINAL)
 #include <QWebChannel>
+#include <QWebEngineLoadingInfo>
 #include <QWebEnginePage>
 #include <QWebEngineSettings>
 #include <QWebEngineView>
@@ -509,53 +510,6 @@ TerminalSessionWidget::TerminalSessionWidget(
   terminal_font.setStyleHint(QFont::TypeWriter);
   terminal_font.setStyleStrategy(QFont::PreferAntialias);
 
-#if defined(GMSSH_HAS_WEBTERMINAL)
-  use_web_terminal_ = true;
-  web_terminal_view_ = new QWebEngineView(this);
-  web_terminal_view_->setObjectName(QStringLiteral("terminalWebView"));
-  web_terminal_view_->setMinimumHeight(240);
-  web_terminal_view_->setFocusPolicy(Qt::StrongFocus);
-  web_terminal_view_->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
-  web_terminal_view_->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
-  web_terminal_view_->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
-  layout->addWidget(web_terminal_view_, 1);
-
-  web_channel_ = new QWebChannel(web_terminal_view_->page());
-  auto* bridge = new WebTerminalBridge(this);
-  web_terminal_bridge_ = bridge;
-  web_channel_->registerObject(QStringLiteral("bridge"), bridge);
-  web_terminal_view_->page()->setWebChannel(web_channel_);
-  connect(bridge, &WebTerminalBridge::inputData, this, [this](const QByteArray& data) {
-    writeTerminalInput(data);
-  });
-  connect(bridge, &WebTerminalBridge::terminalResized, this, [this](int cols, int rows) {
-    terminal_cols_ = std::max(20, cols);
-    terminal_rows_ = std::max(6, rows);
-    updateTerminalWindowSize();
-  });
-  connect(bridge, &WebTerminalBridge::frontendReady, this, [this]() {
-    web_terminal_ready_ = true;
-    if (web_terminal_view_ == nullptr) {
-      return;
-    }
-    for (const auto& payload : pending_web_output_) {
-      const auto script = QStringLiteral("window.gmsshWriteBase64(%1);")
-                              .arg(jsSingleArgument(payload));
-      web_terminal_view_->page()->runJavaScript(script);
-    }
-    pending_web_output_.clear();
-    if (launch_plan_.ok && (pty_master_fd_ < 0 && terminal_process_ == nullptr)) {
-      startTerminalProcess();
-    }
-  });
-  const QUrl terminal_base_url(QStringLiteral("qrc:///terminal/"));
-  QFile terminal_html_file(QStringLiteral(":/terminal/terminal.html"));
-  if (terminal_html_file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    web_terminal_view_->setHtml(QString::fromUtf8(terminal_html_file.readAll()), terminal_base_url);
-  } else {
-    web_terminal_view_->setUrl(QUrl(QStringLiteral("qrc:///terminal/terminal.html")));
-  }
-#else
   auto* terminal_view = new TerminalOutputView(this);
   output_view_ = terminal_view;
   output_view_->setObjectName(QStringLiteral("terminalOutputView"));
@@ -588,6 +542,93 @@ TerminalSessionWidget::TerminalSessionWidget(
     render_pending_ = false;
     renderTerminalBuffer();
   });
+#if defined(GMSSH_HAS_WEBTERMINAL)
+  use_web_terminal_ = true;
+  web_terminal_view_ = new QWebEngineView(this);
+  web_terminal_view_->setObjectName(QStringLiteral("terminalWebView"));
+  web_terminal_view_->setMinimumHeight(240);
+  web_terminal_view_->setFocusPolicy(Qt::StrongFocus);
+  web_terminal_view_->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
+  web_terminal_view_->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessFileUrls, true);
+  web_terminal_view_->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
+  layout->addWidget(web_terminal_view_, 1);
+
+  output_view_->hide();
+
+  web_channel_ = new QWebChannel(web_terminal_view_->page());
+  auto* bridge = new WebTerminalBridge(this);
+  web_terminal_bridge_ = bridge;
+  web_channel_->registerObject(QStringLiteral("bridge"), bridge);
+  web_terminal_view_->page()->setWebChannel(web_channel_);
+  connect(bridge, &WebTerminalBridge::inputData, this, [this](const QByteArray& data) {
+    writeTerminalInput(data);
+  });
+  connect(bridge, &WebTerminalBridge::terminalResized, this, [this](int cols, int rows) {
+    terminal_cols_ = std::max(20, cols);
+    terminal_rows_ = std::max(6, rows);
+    updateTerminalWindowSize();
+  });
+  connect(bridge, &WebTerminalBridge::frontendReady, this, [this]() {
+    if (!use_web_terminal_) {
+      return;
+    }
+    web_terminal_ready_ = true;
+    if (web_terminal_bootstrap_timer_ != nullptr) {
+      web_terminal_bootstrap_timer_->stop();
+    }
+    if (web_terminal_view_ == nullptr) {
+      return;
+    }
+    for (const auto& payload : pending_web_output_) {
+      const auto script = QStringLiteral("window.gmsshWriteBase64(%1);")
+                              .arg(jsSingleArgument(payload));
+      web_terminal_view_->page()->runJavaScript(script);
+    }
+    pending_web_output_.clear();
+    if (launch_plan_.ok && (pty_master_fd_ < 0 && terminal_process_ == nullptr)) {
+      startTerminalProcess();
+    }
+  });
+  connect(web_terminal_view_, &QWebEngineView::loadFinished, this, [this](bool ok) {
+    handleWebTerminalLoadFinished(ok);
+  });
+  connect(
+      web_terminal_view_->page(),
+      &QWebEnginePage::loadingChanged,
+      this,
+      [this](const QWebEngineLoadingInfo& info) {
+        if (info.status() == QWebEngineLoadingInfo::LoadFailedStatus) {
+          logAuditEvent(
+              QStringLiteral("web_terminal_loading_failed_detail"),
+              QJsonObject{
+                  {QStringLiteral("attempt"), web_terminal_bootstrap_attempt_},
+                  {QStringLiteral("url"), info.url().toString()},
+                  {QStringLiteral("error_domain"), static_cast<int>(info.errorDomain())},
+                  {QStringLiteral("error_code"), info.errorCode()},
+                  {QStringLiteral("error_string"), info.errorString()}});
+        }
+      });
+  connect(
+      web_terminal_view_,
+      &QWebEngineView::renderProcessTerminated,
+      this,
+      [this](QWebEnginePage::RenderProcessTerminationStatus status, int exit_code) {
+        logAuditEvent(
+            QStringLiteral("web_terminal_render_process_terminated"),
+            QJsonObject{{QStringLiteral("attempt"), web_terminal_bootstrap_attempt_},
+                        {QStringLiteral("status"), static_cast<int>(status)},
+                        {QStringLiteral("exit_code"), exit_code}});
+      });
+
+  web_terminal_bootstrap_timer_ = new QTimer(this);
+  web_terminal_bootstrap_timer_->setSingleShot(true);
+  web_terminal_bootstrap_timer_->setInterval(12000);
+  connect(web_terminal_bootstrap_timer_, &QTimer::timeout, this, [this]() {
+    handleWebTerminalBootstrapTimeout();
+  });
+
+  beginWebTerminalBootstrap();
+#else
   layout->addWidget(output_view_, 1);
 #endif
 
@@ -676,6 +717,94 @@ void TerminalSessionWidget::activateInputFocus() {
   scrollToBottom();
   output_view_->setFocus();
 }
+
+#if defined(GMSSH_HAS_WEBTERMINAL)
+void TerminalSessionWidget::beginWebTerminalBootstrap() {
+  if (!use_web_terminal_ || web_terminal_view_ == nullptr) {
+    return;
+  }
+  web_terminal_ready_ = false;
+  web_terminal_bootstrap_attempt_ = 1;
+  scheduleWebTerminalBootstrapTimeout();
+  const QUrl terminal_base_url(QStringLiteral("qrc:///terminal/"));
+  QFile terminal_html_file(QStringLiteral(":/terminal/terminal.html"));
+  if (terminal_html_file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    web_terminal_view_->setHtml(QString::fromUtf8(terminal_html_file.readAll()), terminal_base_url);
+  } else {
+    web_terminal_view_->setUrl(QUrl(QStringLiteral("qrc:///terminal/terminal.html")));
+  }
+}
+
+void TerminalSessionWidget::scheduleWebTerminalBootstrapTimeout() {
+  if (web_terminal_bootstrap_timer_ == nullptr) {
+    return;
+  }
+  web_terminal_bootstrap_timer_->stop();
+  web_terminal_bootstrap_timer_->start();
+}
+
+void TerminalSessionWidget::handleWebTerminalLoadFinished(bool ok) {
+  if (!use_web_terminal_) {
+    return;
+  }
+  if (ok) {
+    return;
+  }
+  logAuditEvent(
+      QStringLiteral("web_terminal_load_failed"),
+      QJsonObject{
+          {QStringLiteral("attempt"), web_terminal_bootstrap_attempt_},
+          {QStringLiteral("url"),
+           web_terminal_view_ != nullptr ? web_terminal_view_->url().toString() : QString()}});
+}
+
+void TerminalSessionWidget::handleWebTerminalBootstrapTimeout() {
+  if (!use_web_terminal_ || web_terminal_ready_) {
+    return;
+  }
+  failWebTerminalBootstrap(QStringLiteral("Web 终端初始化超时或资源加载失败"));
+}
+
+void TerminalSessionWidget::failWebTerminalBootstrap(const QString& reason) {
+  web_terminal_ready_ = false;
+  pending_web_output_.clear();
+  if (web_terminal_bootstrap_timer_ != nullptr) {
+    web_terminal_bootstrap_timer_->stop();
+  }
+
+  const QString detail = reason.isEmpty() ? QStringLiteral("未知原因") : reason;
+  terminal_transcript_.append(
+      QStringLiteral("[错误] %1。请关闭当前标签后重新连接。\n").arg(detail));
+  auditTerminalOutput(QStringLiteral("[错误] %1\n").arg(detail));
+  logAuditEvent(
+      QStringLiteral("web_terminal_bootstrap_failed"),
+      QJsonObject{{QStringLiteral("reason"), detail},
+                  {QStringLiteral("attempt"), web_terminal_bootstrap_attempt_}});
+
+  if (web_terminal_view_ != nullptr) {
+    const QString error_html = QStringLiteral(
+                                   "<!doctype html><html><head><meta charset=\"utf-8\"/>"
+                                   "<style>"
+                                   "html,body{margin:0;height:100%;background:#f8fafc;color:#0f172a;"
+                                   "font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',"
+                                   "'PingFang SC','Microsoft YaHei',sans-serif;}"
+                                   ".wrap{height:100%;display:flex;align-items:center;justify-content:center;"
+                                   "padding:24px;box-sizing:border-box;}"
+                                   ".card{max-width:560px;padding:20px 22px;border:1px solid #cbd5e1;"
+                                   "border-radius:12px;background:#ffffff;box-shadow:0 8px 24px rgba(15,23,42,0.08);}"
+                                   ".title{font-size:16px;font-weight:700;margin:0 0 8px 0;}"
+                                   ".desc{font-size:13px;line-height:1.6;color:#334155;margin:0;}"
+                                   "</style></head><body><div class=\"wrap\"><div class=\"card\">"
+                                   "<p class=\"title\">Web 终端启动失败</p>"
+                                   "<p class=\"desc\">原因：%1<br/>请关闭当前会话标签后重新连接。"
+                                   "如果问题持续，请反馈当前系统和 Qt 运行环境信息。</p>"
+                                   "</div></div></body></html>")
+                                   .arg(detail.toHtmlEscaped());
+    web_terminal_view_->setHtml(error_html, QUrl(QStringLiteral("about:blank")));
+    web_terminal_view_->setFocus();
+  }
+}
+#endif
 
 void TerminalSessionWidget::appendOutput(const QString& text) {
   if (text.isEmpty()) {

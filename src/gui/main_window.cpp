@@ -224,15 +224,6 @@ BinaryResolution legacyBinary(const QString& name, const QString& modern_path) {
   candidates.push_back(
       {app_dir_obj.filePath(QStringLiteral("../../bin/%1").arg(legacy_executable_name)),
        QStringLiteral("../../bin-legacy")});
-  candidates.push_back(
-      {app_dir_obj.filePath(QStringLiteral("stage/bin/%1").arg(executable_name)),
-       QStringLiteral("stage/bin")});
-  candidates.push_back(
-      {app_dir_obj.filePath(QStringLiteral("../stage/bin/%1").arg(executable_name)),
-       QStringLiteral("../stage/bin")});
-  candidates.push_back(
-      {app_dir_obj.filePath(QStringLiteral("../../stage/bin/%1").arg(executable_name)),
-       QStringLiteral("../../stage/bin")});
 
   const auto legacy_dir = env.value(QStringLiteral("GMSSH_LEGACY_ENGINE_DIR")).trimmed();
   if (!legacy_dir.isEmpty()) {

@@ -84,7 +84,7 @@ Recommended source: `src-openeuler/openssh` branch `openEuler-24.03-LTS-SP3`.
 ### Dual-engine runtime strategy
 
 - Primary engine (modern): auto-resolved from app bundle `bin/ssh` / `bin/sftp` (or `GMSSH_SSH_PATH` / `GMSSH_SFTP_PATH`).
-- Legacy compatibility engine (optional): auto-resolved from `bin/ssh-legacy-ecgm` or `build/stage/bin/ssh` (dev path), and can be forced by:
+- Legacy compatibility engine (optional): auto-resolved from app bundle `bin/ssh-legacy-ecgm` / `bin/sftp-legacy-ecgm`, and can be forced by:
   - `GMSSH_SSH_LEGACY_PATH`
   - `GMSSH_SFTP_LEGACY_PATH`
   - `GMSSH_LEGACY_ENGINE_DIR`
@@ -148,3 +148,10 @@ sudo GMSSHD_DEBUG_PORT=2222 scripts/openeuler_gm_sshd_debug.sh start
 Detailed GM compatibility matrix (supported / partial / unsupported):
 
 - `docs/gm-compatibility-matrix.md`
+
+## License
+
+- This project is licensed under `GNU Affero General Public License v3.0` (`AGPL-3.0-only`).
+- You may use and redistribute this software.
+- If you distribute modified versions, or provide modified versions as a network service, you must make the corresponding source code available under AGPL v3.
+- You must preserve copyright and attribution notices (see `NOTICE`).

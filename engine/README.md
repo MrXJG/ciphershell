@@ -51,8 +51,8 @@ After build, these binaries are copied to project root:
 - `bin/ssh`, `bin/sftp` (default modern engine)
 - `bin/ssh-modern`, `bin/sftp-modern` (explicit modern alias)
 
-If you also keep a legacy ecgm-compatible engine (for example `build/stage/bin/ssh`),
-the GUI can auto-detect/use it as fallback or read explicit env vars:
+If you also keep a legacy ecgm-compatible engine (for example `bin/ssh-legacy-ecgm`),
+the GUI can auto-detect/use it as fallback, or you can force paths via env vars:
 
 - `GMSSH_SSH_LEGACY_PATH`
 - `GMSSH_SFTP_LEGACY_PATH`

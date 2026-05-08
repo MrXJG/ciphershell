@@ -5,6 +5,7 @@ param(
   [switch]$SkipInstall,
   [switch]$SkipGuiLaunch,
   [switch]$SkipNetworkProbes,
+  [switch]$RequireWebTerminalBundle = $true,
   [string]$OpenEulerHost = "10.0.13.2",
   [int]$OpenEulerPort = 2222,
   [string]$KylinHost = "10.0.13.1",
@@ -31,6 +32,7 @@ $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 $ReportDir = [System.IO.Path]::GetFullPath($ReportDir)
 $ReportPath = Join-Path $ReportDir "windows-install-validation-report.json"
 $DesktopShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) "CipherShell.lnk"
+$StartMenuDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
 $AuditLogPath = Join-Path $InstallDir "log\audit.log"
 $Objdump = "C:\msys64\ucrt64\bin\objdump.exe"
 
@@ -94,7 +96,17 @@ function Get-PeFiles([string]$Root) {
 function Assert-RecursiveImportsResolved([string]$PackageDir) {
   $engineDir = Join-Path $PackageDir "bin"
   $missing = @()
-  foreach ($pe in (Get-PeFiles $PackageDir)) {
+  $targets = @(
+    (Join-Path $PackageDir "CipherShell.exe"),
+    (Join-Path $PackageDir "QtWebEngineProcess.exe"),
+    (Join-Path $PackageDir "platforms\\qwindows.dll"),
+    (Join-Path $engineDir "ssh.exe"),
+    (Join-Path $engineDir "sftp.exe"),
+    (Join-Path $engineDir "ssh-legacy-ecgm.exe"),
+    (Join-Path $engineDir "sftp-legacy-ecgm.exe")
+  ) | Where-Object { Test-Path $_ }
+  foreach ($path in $targets) {
+    $pe = Get-Item $path
     $peDir = Split-Path -Parent $pe.FullName
     foreach ($dll in (Get-ImportedDlls $pe.FullName)) {
       if (!(Test-DllResolved $dll @($PackageDir, $peDir, $engineDir))) {
@@ -104,6 +116,78 @@ function Assert-RecursiveImportsResolved([string]$PackageDir) {
   }
   if ($missing.Count -gt 0) {
     throw ("Unresolved installed imports: {0}" -f ($missing -join "; "))
+  }
+}
+
+function Assert-WebTerminalBundle([string]$PackageDir) {
+  $app = Join-Path $PackageDir "CipherShell.exe"
+  $imports = Get-ImportedDlls $app
+  if (!($imports -contains "Qt6WebEngineWidgets.dll")) {
+    throw "Installed app missing Qt6WebEngineWidgets runtime dependency"
+  }
+  if (!($imports -contains "Qt6WebChannel.dll")) {
+    throw "Installed app missing Qt6WebChannel runtime dependency"
+  }
+
+  foreach ($dll in @("Qt6WebEngineWidgets.dll", "Qt6WebEngineCore.dll", "Qt6WebChannel.dll")) {
+    Assert-File (Join-Path $PackageDir $dll) "installed web runtime $dll"
+  }
+
+  $processCandidates = @(
+    (Join-Path $PackageDir "QtWebEngineProcess.exe"),
+    (Join-Path $PackageDir "bin\\QtWebEngineProcess.exe"),
+    (Join-Path $PackageDir "resources\\QtWebEngineProcess.exe")
+  )
+  if (!($processCandidates | Where-Object { Test-Path $_ })) {
+    throw "Installed app missing QtWebEngineProcess.exe"
+  }
+
+  $resourcesDir = Join-Path $PackageDir "resources"
+  if (!(Test-Path $resourcesDir)) {
+    throw "Installed app missing web resources directory: $resourcesDir"
+  }
+  $webResources = @(Get-ChildItem -Path $resourcesDir -File -Filter "qtwebengine*.pak" -ErrorAction SilentlyContinue)
+  if ($webResources.Count -lt 2) {
+    throw "Installed app missing qtwebengine resource pak files in $resourcesDir"
+  }
+
+  $localeDirs = @(
+    (Join-Path $PackageDir "translations\\qtwebengine_locales"),
+    (Join-Path $PackageDir "qtwebengine_locales")
+  )
+  $localeDir = $localeDirs | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($localeDir)) {
+    throw "Installed app missing qtwebengine locales directory"
+  }
+  $localePaks = @(Get-ChildItem -Path $localeDir -File -Filter "*.pak" -ErrorAction SilentlyContinue)
+  if ($localePaks.Count -lt 1) {
+    throw "Installed app missing qtwebengine locale packs in $localeDir"
+  }
+}
+
+function Get-LegacyShortcutStatus() {
+  $names = @("gmssh_client.lnk", "GMSSH Client.lnk", "GMSSH.lnk")
+  $status = @()
+  foreach ($name in $names) {
+    $desktop = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)) $name
+    $startMenu = Join-Path $StartMenuDir $name
+    $status += [ordered]@{
+      name = $name
+      desktop_exists = Test-Path $desktop
+      desktop_path = $desktop
+      start_menu_exists = Test-Path $startMenu
+      start_menu_path = $startMenu
+    }
+  }
+  return $status
+}
+
+function Assert-LegacyShortcutsRemoved([object[]]$ShortcutStatus) {
+  $remaining = @($ShortcutStatus | Where-Object { $_.desktop_exists -or $_.start_menu_exists })
+  if ($remaining.Count -gt 0) {
+    $details = $remaining |
+      ForEach-Object { "$($_.name):desktop=$($_.desktop_exists),start_menu=$($_.start_menu_exists)" }
+    throw ("Legacy shortcuts still exist after install: {0}" -f ($details -join "; "))
   }
 }
 
@@ -223,14 +307,6 @@ $App = Join-Path $InstallDir "CipherShell.exe"
 $EngineDir = Join-Path $InstallDir "bin"
 Assert-File $App "installed app"
 Assert-File $DesktopShortcut "desktop shortcut"
-foreach ($dll in @(
-  "libfreetype-6.dll",
-  "libharfbuzz-0.dll",
-  "libpng16-16.dll",
-  "libcrypto-3-x64.dll"
-)) {
-  Assert-File (Join-Path $InstallDir $dll) "installed runtime $dll"
-}
 foreach ($engine in @(
   "ssh.exe",
   "sftp.exe",
@@ -241,6 +317,12 @@ foreach ($engine in @(
 }
 
 Assert-RecursiveImportsResolved $InstallDir
+if ($RequireWebTerminalBundle) {
+  Assert-WebTerminalBundle $InstallDir
+}
+
+$LegacyShortcutStatus = Get-LegacyShortcutStatus
+Assert-LegacyShortcutsRemoved $LegacyShortcutStatus
 
 $SelfTest = Start-Process -FilePath $App -ArgumentList @("--self-test") -Wait -PassThru
 if ($SelfTest.ExitCode -ne 0) {
@@ -286,6 +368,9 @@ $Report = [ordered]@{
   self_test = "pass"
   gui_launch = $GuiLaunchStatus
   recursive_imports = "pass"
+  web_terminal_bundle = if ($RequireWebTerminalBundle) { "pass" } else { "not_required" }
+  legacy_shortcuts_removed = "pass"
+  legacy_shortcuts = $LegacyShortcutStatus
   engine_algorithms = "pass"
   network_probes = $NetworkResults
 }

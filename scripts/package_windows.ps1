@@ -2,7 +2,14 @@ param(
   [string]$BuildDir,
   [string]$Configuration = "Release",
   [switch]$SkipTests,
-  [switch]$RequireFullEngineBundle
+  [switch]$RequireFullEngineBundle,
+  [switch]$RequireWebTerminalBundle = $true,
+  [ValidateSet("auto", "msys2", "msvc")]
+  [string]$Toolchain = "auto",
+  [string]$QtRoot,
+  [string]$OpenSslRoot,
+  [string]$MsysRoot = "C:\msys64",
+  [string]$VsDevCmd
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,19 +27,11 @@ $PortableZip = Join-Path $BuildDir "ciphershell-0.1.0-win64-portable.zip"
 $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.0-win64-setup.exe"
 $ReportPath = Join-Path $ReportDir "package-report.json"
 $PackageTestReportPath = Join-Path $ReportDir "windows-package-test-report.json"
-
-$Bash = "C:\msys64\usr\bin\bash.exe"
-$WinDeployQt = "C:\msys64\ucrt64\bin\windeployqt.exe"
-$MakeNsis = "C:\msys64\ucrt64\bin\makensis.exe"
-$UcrtBinDir = "C:\msys64\ucrt64\bin"
-$UsrBinDir = "C:\msys64\usr\bin"
+$UcrtBinDir = Join-Path $MsysRoot "ucrt64\bin"
+$UsrBinDir = Join-Path $MsysRoot "usr\bin"
+$Bash = Join-Path $UsrBinDir "bash.exe"
+$MakeNsis = Join-Path $UcrtBinDir "makensis.exe"
 $Objdump = Join-Path $UcrtBinDir "objdump.exe"
-
-foreach ($Required in @($Bash, $WinDeployQt, $MakeNsis, $Objdump)) {
-  if (!(Test-Path $Required)) {
-    throw "Required tool not found: $Required"
-  }
-}
 
 function Copy-RequiredDlls([string]$SourceDir, [string]$DestinationDir, [string[]]$DllNames) {
   New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
@@ -43,6 +42,19 @@ function Copy-RequiredDlls([string]$SourceDir, [string]$DestinationDir, [string[
     }
     Copy-Item -Force $SourceDll $DestinationDir
   }
+}
+
+function Copy-ExistingDlls([string[]]$SourceDirs, [string]$DestinationDir, [string[]]$DllNames) {
+  New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+  $copied = @()
+  foreach ($dll in $DllNames) {
+    $source = Find-DllSource $dll $SourceDirs
+    if ($source) {
+      Copy-Item -Force $source $DestinationDir
+      $copied += $dll
+    }
+  }
+  return $copied | Select-Object -Unique
 }
 
 function Get-ImportedDlls([string]$Path) {
@@ -164,7 +176,152 @@ function Copy-ResolvedRuntimeDllClosure(
   throw "$Label runtime dependency resolution exceeded iteration limit"
 }
 
+function Find-QtMsvcRoot([string]$Preferred) {
+  if ($Preferred) {
+    $candidate = [System.IO.Path]::GetFullPath($Preferred)
+    if (Test-Path (Join-Path $candidate "bin\windeployqt.exe")) {
+      return $candidate
+    }
+    throw "QtRoot does not contain bin\\windeployqt.exe: $candidate"
+  }
+
+  $candidates = @()
+  if ($env:GMSSH_QT_ROOT) {
+    $candidates += $env:GMSSH_QT_ROOT
+  }
+  $candidates += @(
+    "C:\Users\gmssh-build\Qt\6.10.3\msvc2022_64",
+    "C:\Qt\6.10.3\msvc2022_64",
+    "C:\Qt\6.9.0\msvc2022_64"
+  )
+  foreach ($c in $candidates | Where-Object { $_ } | Select-Object -Unique) {
+    if (Test-Path (Join-Path $c "bin\windeployqt.exe")) {
+      return [System.IO.Path]::GetFullPath($c)
+    }
+  }
+  return $null
+}
+
+function Find-VsDevCmd([string]$Preferred) {
+  if ($Preferred) {
+    $resolved = [System.IO.Path]::GetFullPath($Preferred)
+    if (!(Test-Path $resolved)) {
+      throw "VsDevCmd not found: $resolved"
+    }
+    return $resolved
+  }
+  if ($env:VSDEVCMD_PATH -and (Test-Path $env:VSDEVCMD_PATH)) {
+    return [System.IO.Path]::GetFullPath($env:VSDEVCMD_PATH)
+  }
+  $known = @(
+    "C:\BuildTools\Common7\Tools\VsDevCmd.bat",
+    "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat",
+    "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat"
+  )
+  foreach ($path in $known) {
+    if (Test-Path $path) {
+      return $path
+    }
+  }
+  return $null
+}
+
+function Find-OpenSslRoot([string]$Preferred) {
+  $candidates = @()
+  if ($Preferred) {
+    $candidates += $Preferred
+  }
+  if ($env:GMSSH_OPENSSL_ROOT) {
+    $candidates += $env:GMSSH_OPENSSL_ROOT
+  }
+  $candidates += @(
+    "C:\Users\gmssh-build\Qt\Tools\OpenSSLv3\Win_x64",
+    "C:\Qt\Tools\OpenSSLv3\Win_x64"
+  )
+  foreach ($c in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+    $root = [System.IO.Path]::GetFullPath($c)
+    $lib = Join-Path $root "lib\libcrypto.lib"
+    $inc = Join-Path $root "include\openssl\evp.h"
+    if ((Test-Path $lib) -and (Test-Path $inc)) {
+      return $root
+    }
+  }
+  return $null
+}
+
+function Get-MsvcRuntimeSourceDirs([string]$VsDevCmdPath) {
+  $dirs = @()
+  if ($VsDevCmdPath) {
+    $buildToolsRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $VsDevCmdPath))
+    $redistRoot = Join-Path $buildToolsRoot "VC\Redist\MSVC"
+    if (Test-Path $redistRoot) {
+      $redistBins = Get-ChildItem -Path $redistRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object { Join-Path $_.FullName "x64\Microsoft.VC143.CRT" }
+      foreach ($rb in $redistBins) {
+        if (Test-Path $rb) {
+          $dirs += $rb
+        }
+      }
+    }
+  }
+  $dirs += [Environment]::SystemDirectory
+  return $dirs | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+}
+
+function Get-WindowsKitBinDirs() {
+  $roots = @()
+  $base = "C:\Program Files (x86)\Windows Kits\10\bin"
+  if (Test-Path $base) {
+    $roots += Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending |
+      ForEach-Object { Join-Path $_.FullName "x64" }
+  }
+  return $roots | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+}
+
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
+
+$QtMsvcRoot = Find-QtMsvcRoot $QtRoot
+$ResolvedVsDevCmd = Find-VsDevCmd $VsDevCmd
+$ResolvedOpenSslRoot = Find-OpenSslRoot $OpenSslRoot
+$SelectedToolchain = $Toolchain
+if ($SelectedToolchain -eq "auto") {
+  if ($QtMsvcRoot -and $ResolvedVsDevCmd) {
+    $SelectedToolchain = "msvc"
+  } else {
+    $SelectedToolchain = "msys2"
+  }
+}
+
+if ($SelectedToolchain -eq "msvc") {
+  if (!$QtMsvcRoot) {
+    throw "MSVC toolchain selected but no official Qt root with WebEngine found. Set -QtRoot."
+  }
+  if (!$ResolvedVsDevCmd) {
+    throw "MSVC toolchain selected but VsDevCmd.bat not found. Set -VsDevCmd or install Visual Studio Build Tools."
+  }
+  if (!$ResolvedOpenSslRoot) {
+    throw "MSVC toolchain selected but OpenSSL development root not found. Set -OpenSslRoot or install tools_opensslv3_x64."
+  }
+}
+
+$WinDeployQt = if ($SelectedToolchain -eq "msvc") {
+  Join-Path $QtMsvcRoot "bin\windeployqt.exe"
+} else {
+  Join-Path $UcrtBinDir "windeployqt.exe"
+}
+
+foreach ($Required in @($MakeNsis, $Objdump, $WinDeployQt)) {
+  if (!(Test-Path $Required)) {
+    throw "Required tool not found: $Required"
+  }
+}
+if ($SelectedToolchain -eq "msys2" -and !(Test-Path $Bash)) {
+  throw "Required tool not found: $Bash"
+}
 
 function Convert-ToMsysPath([string]$Path) {
   $Full = [System.IO.Path]::GetFullPath($Path).Replace('\', '/')
@@ -177,26 +334,83 @@ function Convert-ToMsysPath([string]$Path) {
 $RootMsys = Convert-ToMsysPath $RootDir
 $BuildMsys = Convert-ToMsysPath $BuildDir
 $TestArg = if ($SkipTests) { "" } else { "ctest --test-dir '$BuildMsys' --output-on-failure" }
-
-$BuildScript = @"
+$BuildLogPath = Join-Path $ReportDir "build-and-test.log"
+$NativeErrorAction = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$BuildExitCode = 0
+if ($SelectedToolchain -eq "msys2") {
+  $BuildScript = @"
 set -euo pipefail
 export MSYSTEM=UCRT64
 export PATH=/ucrt64/bin:/usr/bin:`$PATH
-cmake -S '$RootMsys' -B '$BuildMsys' -G Ninja -DCMAKE_BUILD_TYPE='$Configuration'
+cmake -S '$RootMsys' -B '$BuildMsys' -G Ninja -DCMAKE_BUILD_TYPE='$Configuration' -DGMSSH_ENABLE_WEB_TERMINAL=ON -DGMSSH_REQUIRE_WEB_TERMINAL=ON
 cmake --build '$BuildMsys' --parallel `$(nproc)
 $TestArg
 "@
-
-$NativeErrorAction = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-& $Bash -lc $BuildScript 2>&1 | Tee-Object -FilePath (Join-Path $ReportDir "build-and-test.log")
-$BuildExitCode = $LASTEXITCODE
+  & $Bash -lc $BuildScript 2>&1 | Tee-Object -FilePath $BuildLogPath
+  $BuildExitCode = $LASTEXITCODE
+} else {
+  $BuildCmdPath = Join-Path $ReportDir "build-msvc.cmd"
+  $QtPrefix = $QtMsvcRoot.Replace('"', '""')
+  $QtBin = (Join-Path $QtMsvcRoot "bin").Replace('"', '""')
+  $OpenSslPrefix = $ResolvedOpenSslRoot.Replace('"', '""')
+  $OpenSslInclude = (Join-Path $ResolvedOpenSslRoot "include").Replace('"', '""')
+  $OpenSslBin = (Join-Path $ResolvedOpenSslRoot "bin").Replace('"', '""')
+  $OpenSslCryptoLib = (Join-Path $ResolvedOpenSslRoot "lib\libcrypto.lib").Replace('"', '""')
+  $OpenSslSslLib = (Join-Path $ResolvedOpenSslRoot "lib\libssl.lib").Replace('"', '""')
+  $VsDevCmdEscaped = $ResolvedVsDevCmd.Replace('"', '""')
+  $RootEscaped = $RootDir.Replace('"', '""')
+  $BuildEscaped = $BuildDir.Replace('"', '""')
+  $MsvcTestStep = if ($SkipTests) {
+    "echo [skip] tests"
+  } else {
+    "set `"PATH=$QtBin;$OpenSslBin;%PATH%`"`r`nctest --test-dir `"$BuildEscaped`" -C $Configuration --output-on-failure`r`nif errorlevel 1 exit /b 1"
+  }
+  @"
+@echo off
+call "$VsDevCmdEscaped" -arch=x64 -host_arch=x64
+if errorlevel 1 exit /b 1
+where cmake >nul 2>nul
+if errorlevel 1 exit /b 1
+where ninja >nul 2>nul
+if errorlevel 1 exit /b 1
+if exist "$BuildEscaped\CMakeCache.txt" del /f /q "$BuildEscaped\CMakeCache.txt"
+if exist "$BuildEscaped\CMakeFiles" rmdir /s /q "$BuildEscaped\CMakeFiles"
+cmake -S "$RootEscaped" -B "$BuildEscaped" -G Ninja -DCMAKE_BUILD_TYPE=$Configuration -DCMAKE_PREFIX_PATH="$QtPrefix" -DOPENSSL_ROOT_DIR="$OpenSslPrefix" -DOPENSSL_INCLUDE_DIR="$OpenSslInclude" -DOPENSSL_CRYPTO_LIBRARY="$OpenSslCryptoLib" -DOPENSSL_SSL_LIBRARY="$OpenSslSslLib" -DGMSSH_ENABLE_WEB_TERMINAL=ON -DGMSSH_REQUIRE_WEB_TERMINAL=ON
+if errorlevel 1 exit /b 1
+cmake --build "$BuildEscaped" --parallel
+if errorlevel 1 exit /b 1
+$MsvcTestStep
+"@ | Set-Content -Encoding ASCII -Path $BuildCmdPath
+  & cmd.exe /d /c $BuildCmdPath 2>&1 | Tee-Object -FilePath $BuildLogPath
+  $BuildExitCode = $LASTEXITCODE
+}
 $ErrorActionPreference = $NativeErrorAction
 if ($BuildExitCode -ne 0) {
-  throw "Build/test failed; see $ReportDir\build-and-test.log"
+  throw "Build/test failed; see $BuildLogPath"
+}
+$BuildLogContent = Get-Content -Raw -Path $BuildLogPath
+$TerminalRenderer = "unknown"
+if ($BuildLogContent -match "Embedded web terminal enabled \(Qt WebEngine \+ WebChannel\)\.") {
+  $TerminalRenderer = "webengine"
+} elseif ($BuildLogContent -match "falling back to legacy terminal renderer") {
+  $TerminalRenderer = "legacy"
+}
+if ($BuildLogContent -match "falling back to legacy terminal renderer") {
+  throw "Build produced a legacy-terminal fallback, but Windows packaging requires embedded web terminal."
+}
+if ($BuildLogContent -notmatch "Embedded web terminal enabled \(Qt WebEngine \+ WebChannel\)\.") {
+  throw "Build did not confirm embedded web terminal enablement; check WebEngine/WebChannel toolchain."
 }
 
 $AppExe = Join-Path $BuildDir "CipherShell.exe"
+if (!(Test-Path $AppExe) -and $SelectedToolchain -eq "msvc") {
+  $candidate = Join-Path $BuildDir $Configuration
+  $candidate = Join-Path $candidate "CipherShell.exe"
+  if (Test-Path $candidate) {
+    $AppExe = $candidate
+  }
+}
 if (!(Test-Path $AppExe)) {
   throw "Built executable not found: $AppExe"
 }
@@ -220,32 +434,74 @@ if (Test-Path $StageEngineDir) {
   }
 }
 
-$env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
 $NativeErrorAction = $ErrorActionPreference
+$OldPath = $env:PATH
 $ErrorActionPreference = "Continue"
+if ($SelectedToolchain -eq "msvc") {
+  $env:PATH = @((Join-Path $QtMsvcRoot "bin"), $UcrtBinDir, $UsrBinDir, $OldPath) -join ";"
+} else {
+  $env:PATH = @($UcrtBinDir, $UsrBinDir, $OldPath) -join ";"
+}
 & $WinDeployQt --release --compiler-runtime --dir $StageDir (Join-Path $StageDir "CipherShell.exe") 2>&1 |
   Tee-Object -FilePath (Join-Path $ReportDir "windeployqt.log")
 $WinDeployQtExitCode = $LASTEXITCODE
+$env:PATH = $OldPath
 $ErrorActionPreference = $NativeErrorAction
 if ($WinDeployQtExitCode -ne 0) {
   throw "windeployqt failed; see $ReportDir\windeployqt.log"
 }
 
-# MSYS2's windeployqt can miss the MinGW/UCRT compiler runtime even with
-# --compiler-runtime. These DLLs must sit next to CipherShell.exe.
-$GuiRuntimeDlls = @(
-  "libgcc_s_seh-1.dll",
-  "libstdc++-6.dll",
-  "libwinpthread-1.dll",
-  "libcrypto-3-x64.dll"
-)
-Copy-RequiredDlls $UcrtBinDir $StageDir $GuiRuntimeDlls
-$ResolvedGuiDlls = Copy-ResolvedRuntimeDllClosure `
-  -Root $StageDir `
-  -DestinationDir $StageDir `
-  -SourceDirs @($UcrtBinDir) `
-  -ExcludeRoots @($StageEngineDir) `
-  -Label "GUI"
+$GuiRuntimeDlls = @()
+$GuiRuntimeSourceDirs = @()
+$ResolvedGuiDlls = [ordered]@{}
+if ($SelectedToolchain -eq "msvc") {
+  $GuiRuntimeSourceDirs += (Join-Path $QtMsvcRoot "bin")
+  if ($ResolvedOpenSslRoot) {
+    $GuiRuntimeSourceDirs += (Join-Path $ResolvedOpenSslRoot "bin")
+  }
+  $GuiRuntimeSourceDirs += Get-MsvcRuntimeSourceDirs $ResolvedVsDevCmd
+  $GuiRuntimeSourceDirs += Get-WindowsKitBinDirs
+  $GuiRuntimeSourceDirs += $UcrtBinDir
+  $GuiRuntimeSourceDirs = $GuiRuntimeSourceDirs |
+    Where-Object { $_ -and (Test-Path $_) } |
+    Select-Object -Unique
+  $GuiRuntimeDlls = Copy-ExistingDlls $GuiRuntimeSourceDirs $StageDir @(
+    "libcrypto-3-x64.dll",
+    "msvcp140.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "concrt140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "dxcompiler.dll",
+    "dxil.dll"
+  )
+  $ResolvedGuiDlls = [ordered]@{
+    mode = "msvc_targeted_runtime_copy"
+    source_dirs = $GuiRuntimeSourceDirs
+    copied = $GuiRuntimeDlls
+  }
+} else {
+  # MSYS2's windeployqt can miss the MinGW/UCRT compiler runtime even with
+  # --compiler-runtime. These DLLs must sit next to CipherShell.exe.
+  $GuiRuntimeDlls = @(
+    "libgcc_s_seh-1.dll",
+    "libstdc++-6.dll",
+    "libwinpthread-1.dll",
+    "libcrypto-3-x64.dll"
+  )
+  Copy-RequiredDlls $UcrtBinDir $StageDir $GuiRuntimeDlls
+  $GuiRuntimeSourceDirs += $UcrtBinDir
+  $GuiRuntimeSourceDirs = $GuiRuntimeSourceDirs |
+    Where-Object { $_ -and (Test-Path $_) } |
+    Select-Object -Unique
+  $ResolvedGuiDlls = Copy-ResolvedRuntimeDllClosure `
+    -Root $StageDir `
+    -DestinationDir $StageDir `
+    -SourceDirs $GuiRuntimeSourceDirs `
+    -ExcludeRoots @($StageEngineDir) `
+    -Label "GUI"
+}
 $ResolvedEngineDlls = [ordered]@{}
 if (Test-Path $StageEngineDir) {
   $ResolvedEngineDlls = Copy-ResolvedRuntimeDllClosure `
@@ -278,6 +534,20 @@ Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 Section "Install"
+  SetShellVarContext current
+  IfFileExists "`$INSTDIR\Uninstall.exe" 0 skip_old_uninstall
+  ExecWait '"`$INSTDIR\Uninstall.exe" /S _?=`$INSTDIR'
+  Sleep 500
+skip_old_uninstall:
+  Delete "`$SMPROGRAMS\gmssh_client.lnk"
+  Delete "`$SMPROGRAMS\GMSSH Client.lnk"
+  Delete "`$SMPROGRAMS\GMSSH.lnk"
+  Delete "`$DESKTOP\gmssh_client.lnk"
+  Delete "`$DESKTOP\GMSSH Client.lnk"
+  Delete "`$DESKTOP\GMSSH.lnk"
+  RMDir /r "`$LOCALAPPDATA\Programs\gmssh_client"
+  RMDir /r "`$LOCALAPPDATA\Programs\gmssh-client"
+  RMDir /r "`$LOCALAPPDATA\Programs\GMSSH Client"
   SetOutPath "`$INSTDIR"
   File /r "$StageForNsis\\*.*"
   CreateDirectory "`$INSTDIR\log"
@@ -289,8 +559,15 @@ Section "Install"
   WriteUninstaller "`$INSTDIR\Uninstall.exe"
 SectionEnd
 Section "Uninstall"
+  SetShellVarContext current
   Delete "`$SMPROGRAMS\CipherShell.lnk"
   Delete "`$DESKTOP\CipherShell.lnk"
+  Delete "`$SMPROGRAMS\gmssh_client.lnk"
+  Delete "`$SMPROGRAMS\GMSSH Client.lnk"
+  Delete "`$SMPROGRAMS\GMSSH.lnk"
+  Delete "`$DESKTOP\gmssh_client.lnk"
+  Delete "`$DESKTOP\GMSSH Client.lnk"
+  Delete "`$DESKTOP\GMSSH.lnk"
   RMDir /r "`$INSTDIR"
 SectionEnd
 "@ | Set-Content -Encoding UTF8 -Path $NsisScript
@@ -310,9 +587,13 @@ $PackageTestArgs = @{
   InstallerExe = $InstallerExe
   PortableZip = $PortableZip
   ReportDir = $ReportDir
+  Toolchain = $SelectedToolchain
 }
 if ($RequireFullEngineBundle) {
   $PackageTestArgs["RequireFullEngineBundle"] = $true
+}
+if ($RequireWebTerminalBundle) {
+  $PackageTestArgs["RequireWebTerminalBundle"] = $true
 }
 & (Join-Path $PSScriptRoot "test_windows_package.ps1") @PackageTestArgs 2>&1 |
   Tee-Object -FilePath (Join-Path $ReportDir "windows-package-test.log")
@@ -366,6 +647,11 @@ $Report = [ordered]@{
   nsis = "pass"
   package_smoke_test = "pass"
   package_smoke_test_report = $PackageTestReportPath
+  toolchain = $SelectedToolchain
+  qt_root = if ($QtMsvcRoot) { $QtMsvcRoot } else { "" }
+  openssl_root = if ($ResolvedOpenSslRoot) { $ResolvedOpenSslRoot } else { "" }
+  vsdevcmd = if ($ResolvedVsDevCmd) { $ResolvedVsDevCmd } else { "" }
+  terminal_renderer = $TerminalRenderer
   engine_bundle = $EngineBundleStatus
   runtime_dlls = $RuntimeDlls
   resolved_gui_dlls = $ResolvedGuiDlls

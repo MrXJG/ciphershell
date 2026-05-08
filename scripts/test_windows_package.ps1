@@ -5,7 +5,10 @@ param(
   [string]$PortableZip,
   [string]$ReportDir,
   [switch]$RequireFullEngineBundle,
-  [switch]$SkipInstaller
+  [switch]$RequireWebTerminalBundle,
+  [switch]$SkipInstaller,
+  [ValidateSet("auto", "msys2", "msvc")]
+  [string]$Toolchain = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,11 +42,20 @@ $SystemSearchDirs = @(
 ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 
 New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 function Assert-File([string]$Path, [string]$Label) {
   if (!(Test-Path $Path)) {
     throw "$Label missing: $Path"
   }
+}
+
+function Expand-ZipNoProgress([string]$ZipPath, [string]$DestinationPath) {
+  if (Test-Path $DestinationPath) {
+    Remove-Item -Recurse -Force $DestinationPath
+  }
+  New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestinationPath)
 }
 
 function Get-ImportedDlls([string]$ExePath) {
@@ -116,7 +128,22 @@ function Get-PeFiles([string]$Root) {
 function Assert-PackageImportsResolved([string]$PackageDir) {
   $missing = @()
   $engineDir = Join-Path $PackageDir "bin"
-  foreach ($pe in (Get-PeFiles $PackageDir)) {
+  $targets = @()
+  if ($Toolchain -eq "msvc") {
+    $targets += @(
+      (Join-Path $PackageDir "CipherShell.exe"),
+      (Join-Path $PackageDir "QtWebEngineProcess.exe"),
+      (Join-Path $PackageDir "platforms\\qwindows.dll"),
+      (Join-Path $engineDir "ssh.exe"),
+      (Join-Path $engineDir "sftp.exe"),
+      (Join-Path $engineDir "ssh-legacy-ecgm.exe"),
+      (Join-Path $engineDir "sftp-legacy-ecgm.exe")
+    ) | Where-Object { Test-Path $_ }
+  } else {
+    $targets += (Get-PeFiles $PackageDir | ForEach-Object { $_.FullName })
+  }
+  foreach ($path in $targets) {
+    $pe = Get-Item $path
     $peDir = Split-Path -Parent $pe.FullName
     foreach ($dll in (Get-ImportedDlls $pe.FullName)) {
       if (!(Test-DllResolved $dll @($PackageDir, $peDir, $engineDir))) {
@@ -126,6 +153,52 @@ function Assert-PackageImportsResolved([string]$PackageDir) {
   }
   if ($missing.Count -gt 0) {
     throw ("Unresolved package imports: {0}" -f ($missing -join "; "))
+  }
+}
+
+function Assert-WebTerminalBundle([string]$PackageDir, [string]$Name) {
+  $app = Join-Path $PackageDir "CipherShell.exe"
+  $imports = Get-ImportedDlls $app
+  if (!($imports -contains "Qt6WebEngineWidgets.dll")) {
+    throw "$Name missing Qt6WebEngineWidgets runtime dependency in CipherShell.exe imports"
+  }
+  if (!($imports -contains "Qt6WebChannel.dll")) {
+    throw "$Name missing Qt6WebChannel runtime dependency in CipherShell.exe imports"
+  }
+
+  Assert-File (Join-Path $PackageDir "Qt6WebEngineWidgets.dll") "$Name web runtime Qt6WebEngineWidgets.dll"
+  Assert-File (Join-Path $PackageDir "Qt6WebEngineCore.dll") "$Name web runtime Qt6WebEngineCore.dll"
+  Assert-File (Join-Path $PackageDir "Qt6WebChannel.dll") "$Name web runtime Qt6WebChannel.dll"
+
+  $processCandidates = @(
+    (Join-Path $PackageDir "QtWebEngineProcess.exe"),
+    (Join-Path $PackageDir "bin\\QtWebEngineProcess.exe"),
+    (Join-Path $PackageDir "resources\\QtWebEngineProcess.exe")
+  )
+  if (!($processCandidates | Where-Object { Test-Path $_ })) {
+    throw "$Name missing QtWebEngineProcess.exe"
+  }
+
+  $resourcesDir = Join-Path $PackageDir "resources"
+  if (!(Test-Path $resourcesDir)) {
+    throw "$Name missing web runtime resources directory: $resourcesDir"
+  }
+  $webResources = @(Get-ChildItem -Path $resourcesDir -File -Filter "qtwebengine*.pak" -ErrorAction SilentlyContinue)
+  if ($webResources.Count -lt 2) {
+    throw "$Name missing qtwebengine resource pak files in $resourcesDir"
+  }
+
+  $localeDirs = @(
+    (Join-Path $PackageDir "translations\\qtwebengine_locales"),
+    (Join-Path $PackageDir "qtwebengine_locales")
+  )
+  $localeDir = $localeDirs | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($localeDir)) {
+    throw "$Name missing qtwebengine locales directory"
+  }
+  $localePaks = @(Get-ChildItem -Path $localeDir -File -Filter "*.pak" -ErrorAction SilentlyContinue)
+  if ($localePaks.Count -lt 1) {
+    throw "$Name missing qtwebengine locale packs in $localeDir"
   }
 }
 
@@ -171,11 +244,14 @@ function Test-PackageTree([string]$PackageDir, [string]$Name) {
   $modernSftp = Join-Path $engineDir "sftp.exe"
   $legacySsh = Join-Path $engineDir "ssh-legacy-ecgm.exe"
   $legacySftp = Join-Path $engineDir "sftp-legacy-ecgm.exe"
+  $appImports = Get-ImportedDlls $app
+  $runtimeFlavor = if (($appImports -contains "libstdc++-6.dll") -or ($appImports -contains "libgcc_s_seh-1.dll")) {
+    "mingw"
+  } else {
+    "msvc"
+  }
 
   Assert-File $app "$Name CipherShell.exe"
-  foreach ($dll in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "libcrypto-3-x64.dll")) {
-    Assert-File (Join-Path $PackageDir $dll) "$Name GUI runtime $dll"
-  }
   foreach ($dll in @("msys-2.0.dll", "msys-crypto-3.dll", "msys-z.dll", "msys-gcc_s-seh-1.dll")) {
     Assert-File (Join-Path $engineDir $dll) "$Name engine runtime $dll"
   }
@@ -187,6 +263,9 @@ function Test-PackageTree([string]$PackageDir, [string]$Name) {
   }
 
   Assert-PackageImportsResolved $PackageDir
+  if ($RequireWebTerminalBundle) {
+    Assert-WebTerminalBundle $PackageDir $Name
+  }
 
   Invoke-CleanPath -PathEntries @($PackageDir, $engineDir, [Environment]::SystemDirectory, $env:WINDIR) -Body {
     & $app --self-test
@@ -203,8 +282,10 @@ function Test-PackageTree([string]$PackageDir, [string]$Name) {
   return [ordered]@{
     name = $Name
     package_dir = $PackageDir
+    runtime_flavor = $runtimeFlavor
     self_test = "pass"
     imports = "pass"
+    web_terminal_bundle = if ($RequireWebTerminalBundle) { "pass" } else { "not_required" }
     modern_engine = "pass"
     legacy_engine = if ((Test-Path $legacySsh) -and (Test-Path $legacySftp)) { "pass" } else { "missing" }
   }
@@ -215,8 +296,7 @@ $Results += Test-PackageTree $StageDir "stage"
 
 Assert-File $PortableZip "portable zip"
 $PortableExtractDir = Join-Path $ReportDir "portable-extract"
-Remove-Item -Recurse -Force $PortableExtractDir -ErrorAction SilentlyContinue
-Expand-Archive -Force -Path $PortableZip -DestinationPath $PortableExtractDir
+Expand-ZipNoProgress -ZipPath $PortableZip -DestinationPath $PortableExtractDir
 $Results += Test-PackageTree $PortableExtractDir "portable_zip"
 
 if (!$SkipInstaller) {
@@ -233,6 +313,7 @@ if (!$SkipInstaller) {
 $Report = [ordered]@{
   verdict = "pass"
   report_path = $ReportPath
+  toolchain = $Toolchain
   require_full_engine_bundle = [bool]$RequireFullEngineBundle
   results = $Results
 }

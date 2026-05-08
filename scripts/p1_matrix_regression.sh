@@ -4,11 +4,24 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${GMSSH_BUILD_DIR:-${ROOT_DIR}/build}"
 OUT_DIR="${GMSSH_P1_MATRIX_OUT_DIR:-${BUILD_DIR}/p1-matrix/$(date +%Y%m%d-%H%M%S)}"
+APP_BIN_DIR="${BUILD_DIR}/CipherShell.app/Contents/MacOS/bin"
 
-MODERN_SSH="${GMSSH_MODERN_SSH:-${ROOT_DIR}/build/bin/ssh}"
-MODERN_SFTP="${GMSSH_MODERN_SFTP:-${ROOT_DIR}/build/bin/sftp}"
-LEGACY_SSH="${GMSSH_LEGACY_SSH:-${ROOT_DIR}/build/stage/bin/ssh}"
-LEGACY_SFTP="${GMSSH_LEGACY_SFTP:-${ROOT_DIR}/build/stage/bin/sftp}"
+resolve_engine_path() {
+  local fallback="$1"
+  shift
+  for candidate in "$@"; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s' "${fallback}"
+}
+
+MODERN_SSH="${GMSSH_MODERN_SSH:-$(resolve_engine_path "${ROOT_DIR}/bin/ssh" "${ROOT_DIR}/bin/ssh" "${APP_BIN_DIR}/ssh" "${BUILD_DIR}/bin/ssh")}"
+MODERN_SFTP="${GMSSH_MODERN_SFTP:-$(resolve_engine_path "${ROOT_DIR}/bin/sftp" "${ROOT_DIR}/bin/sftp" "${APP_BIN_DIR}/sftp" "${BUILD_DIR}/bin/sftp")}"
+LEGACY_SSH="${GMSSH_LEGACY_SSH:-$(resolve_engine_path "${ROOT_DIR}/bin/ssh-legacy-ecgm" "${ROOT_DIR}/bin/ssh-legacy-ecgm" "${APP_BIN_DIR}/ssh-legacy-ecgm" "${BUILD_DIR}/bin/ssh-legacy-ecgm")}"
+LEGACY_SFTP="${GMSSH_LEGACY_SFTP:-$(resolve_engine_path "${ROOT_DIR}/bin/sftp-legacy-ecgm" "${ROOT_DIR}/bin/sftp-legacy-ecgm" "${APP_BIN_DIR}/sftp-legacy-ecgm" "${BUILD_DIR}/bin/sftp-legacy-ecgm")}"
 
 PROFILES_PATH="${GMSSH_PROFILES_PATH:-${HOME}/Library/Preferences/internal/gmssh-client/profiles.json}"
 CREDENTIALS_PATH="${GMSSH_CREDENTIALS_PATH:-${HOME}/Library/Preferences/internal/gmssh-client/credentials.json}"
