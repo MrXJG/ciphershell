@@ -57,6 +57,11 @@
         const fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         term.open(document.getElementById('terminal'));
+        const kDefaultFontSize = 14;
+        const kMinFontSize = 11;
+        const kMaxFontSize = 28;
+        let currentFontSize = kDefaultFontSize;
+        let resetFontSize = kDefaultFontSize;
 
         const encodeUtf8ToBase64 = (value) => {
           const bytes = new TextEncoder().encode(value);
@@ -91,8 +96,28 @@
           });
         };
 
+        const applyFontSize = (nextFontSize, updateResetBaseline = false) => {
+          const numeric = Number(nextFontSize);
+          if (!Number.isFinite(numeric)) {
+            return;
+          }
+          const clamped = Math.max(kMinFontSize, Math.min(kMaxFontSize, Math.round(numeric)));
+          if (updateResetBaseline) {
+            resetFontSize = clamped;
+          }
+          if (clamped === currentFontSize) {
+            return;
+          }
+          currentFontSize = clamped;
+          term.options.fontSize = currentFontSize;
+          refitSoon();
+        };
+
         window.gmsshWriteBase64 = (payload) => {
           term.write(decodeBase64ToUtf8(payload));
+        };
+        window.gmsshSetFontSize = (size, updateResetBaseline = false) => {
+          applyFontSize(size, Boolean(updateResetBaseline));
         };
 
         term.onData((data) => {
@@ -106,6 +131,41 @@
             bridge.resizeTerminal(size.cols, size.rows);
           }
         });
+
+        const isZoomModifier = (event) => (event.metaKey || event.ctrlKey) && !event.altKey;
+        const handleZoomKey = (event) => {
+          if (!isZoomModifier(event)) {
+            return false;
+          }
+          if (event.key === '+' || event.key === '=' || event.code === 'NumpadAdd') {
+            applyFontSize(currentFontSize + 1);
+            return true;
+          }
+          if (event.key === '-' || event.key === '_' || event.code === 'NumpadSubtract') {
+            applyFontSize(currentFontSize - 1);
+            return true;
+          }
+          if (event.key === '0' || event.code === 'Digit0' || event.code === 'Numpad0') {
+            applyFontSize(resetFontSize);
+            return true;
+          }
+          return false;
+        };
+
+        document.addEventListener('keydown', (event) => {
+          if (handleZoomKey(event)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }, true);
+
+        document.addEventListener('wheel', (event) => {
+          if (!isZoomModifier(event) || event.deltaY === 0) {
+            return;
+          }
+          applyFontSize(currentFontSize + (event.deltaY < 0 ? 1 : -1));
+          event.preventDefault();
+        }, { passive: false, capture: true });
 
         window.addEventListener('resize', refitSoon);
 

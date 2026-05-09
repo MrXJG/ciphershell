@@ -18,7 +18,7 @@ $ProgressPreference = "SilentlyContinue"
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BuildDir = Join-Path $RootDir "build-win"
 if ([string]::IsNullOrWhiteSpace($InstallerExe)) {
-  $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.0-win64-setup.exe"
+  $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.1-win64-setup.exe"
 }
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
   $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\CipherShell"

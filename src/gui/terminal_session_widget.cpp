@@ -26,6 +26,7 @@
 #include <QUrl>
 #include <QUuid>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #if defined(GMSSH_HAS_WEBTERMINAL)
 #include <QWebChannel>
 #include <QWebEngineLoadingInfo>
@@ -289,8 +290,20 @@ class TerminalOutputView final : public QPlainTextEdit {
     resize_handler_ = std::move(handler);
   }
 
+  void setShortcutHandler(std::function<bool(QKeyEvent*)> handler) {
+    shortcut_handler_ = std::move(handler);
+  }
+
+  void setWheelHandler(std::function<bool(QWheelEvent*)> handler) {
+    wheel_handler_ = std::move(handler);
+  }
+
  protected:
   void keyPressEvent(QKeyEvent* event) override {
+    if (shortcut_handler_ && shortcut_handler_(event)) {
+      return;
+    }
+
     const auto modifiers = event->modifiers();
 
 #if defined(Q_OS_MACOS)
@@ -419,6 +432,13 @@ class TerminalOutputView final : public QPlainTextEdit {
     event->ignore();
   }
 
+  void wheelEvent(QWheelEvent* event) override {
+    if (wheel_handler_ && wheel_handler_(event)) {
+      return;
+    }
+    QPlainTextEdit::wheelEvent(event);
+  }
+
   void resizeEvent(QResizeEvent* event) override {
     QPlainTextEdit::resizeEvent(event);
     if (resize_handler_) {
@@ -439,6 +459,8 @@ class TerminalOutputView final : public QPlainTextEdit {
 
   std::function<void(QByteArray)> input_handler_;
   std::function<void()> resize_handler_;
+  std::function<bool(QKeyEvent*)> shortcut_handler_;
+  std::function<bool(QWheelEvent*)> wheel_handler_;
 };
 
 #if defined(GMSSH_HAS_WEBTERMINAL)
@@ -509,6 +531,8 @@ TerminalSessionWidget::TerminalSessionWidget(
   }
   terminal_font.setStyleHint(QFont::TypeWriter);
   terminal_font.setStyleStrategy(QFont::PreferAntialias);
+  default_terminal_font_size_ = terminal_font.pointSize();
+  terminal_font_size_ = default_terminal_font_size_;
 
   auto* terminal_view = new TerminalOutputView(this);
   output_view_ = terminal_view;
@@ -520,6 +544,12 @@ TerminalSessionWidget::TerminalSessionWidget(
   });
   terminal_view->setResizeHandler([this]() {
     updateTerminalWindowSize();
+  });
+  terminal_view->setShortcutHandler([this](QKeyEvent* event) {
+    return handleZoomKeyPress(event);
+  });
+  terminal_view->setWheelHandler([this](QWheelEvent* event) {
+    return handleZoomWheel(event);
   });
   connect(
       output_view_->verticalScrollBar(),
@@ -585,6 +615,7 @@ TerminalSessionWidget::TerminalSessionWidget(
       web_terminal_view_->page()->runJavaScript(script);
     }
     pending_web_output_.clear();
+    applyTerminalFontSize(terminal_font_size_, true);
     if (launch_plan_.ok && (pty_master_fd_ < 0 && terminal_process_ == nullptr)) {
       startTerminalProcess();
     }
@@ -716,6 +747,124 @@ void TerminalSessionWidget::activateInputFocus() {
   follow_output_tail_ = true;
   scrollToBottom();
   output_view_->setFocus();
+}
+
+bool TerminalSessionWidget::handleZoomKeyPress(QKeyEvent* event) {
+  if (event == nullptr) {
+    return false;
+  }
+  const auto modifiers = event->modifiers();
+#if defined(Q_OS_MACOS)
+  // Qt on macOS reports Command as ControlModifier.
+  const bool zoom_modifier = (modifiers & Qt::ControlModifier) &&
+                             !(modifiers & Qt::MetaModifier) &&
+                             !(modifiers & Qt::AltModifier);
+#else
+  const bool zoom_modifier = (modifiers & Qt::ControlModifier) &&
+                             !(modifiers & Qt::MetaModifier) &&
+                             !(modifiers & Qt::AltModifier);
+#endif
+  if (!zoom_modifier) {
+    return false;
+  }
+
+  switch (event->key()) {
+    case Qt::Key_Equal:
+    case Qt::Key_Plus:
+      adjustTerminalFontSize(1);
+      event->accept();
+      return true;
+    case Qt::Key_Minus:
+    case Qt::Key_Underscore:
+      adjustTerminalFontSize(-1);
+      event->accept();
+      return true;
+    case Qt::Key_0:
+    case Qt::Key_ParenRight:
+      resetTerminalFontSize();
+      event->accept();
+      return true;
+    default:
+      if (event->text() == QStringLiteral("0")) {
+        resetTerminalFontSize();
+        event->accept();
+        return true;
+      }
+      return false;
+  }
+}
+
+bool TerminalSessionWidget::handleZoomWheel(QWheelEvent* event) {
+  if (event == nullptr) {
+    return false;
+  }
+
+  const auto modifiers = event->modifiers();
+#if defined(Q_OS_MACOS)
+  const bool zoom_modifier = (modifiers & Qt::ControlModifier) &&
+                             !(modifiers & Qt::MetaModifier) &&
+                             !(modifiers & Qt::AltModifier);
+#else
+  const bool zoom_modifier = (modifiers & Qt::ControlModifier) &&
+                             !(modifiers & Qt::MetaModifier) &&
+                             !(modifiers & Qt::AltModifier);
+#endif
+  if (!zoom_modifier) {
+    return false;
+  }
+
+  const int delta =
+      event->angleDelta().y() != 0 ? event->angleDelta().y() : event->pixelDelta().y();
+  if (delta > 0) {
+    adjustTerminalFontSize(1);
+  } else if (delta < 0) {
+    adjustTerminalFontSize(-1);
+  }
+  event->accept();
+  return true;
+}
+
+void TerminalSessionWidget::adjustTerminalFontSize(int delta) {
+  applyTerminalFontSize(terminal_font_size_ + delta);
+}
+
+void TerminalSessionWidget::resetTerminalFontSize() {
+  applyTerminalFontSize(default_terminal_font_size_);
+}
+
+void TerminalSessionWidget::applyTerminalFontSize(int point_size, bool update_reset_baseline) {
+  constexpr int kMinTerminalFontSize = 11;
+  constexpr int kMaxTerminalFontSize = 28;
+  const int clamped = std::clamp(point_size, kMinTerminalFontSize, kMaxTerminalFontSize);
+  terminal_font_size_ = clamped;
+
+  if (output_view_ != nullptr) {
+    auto font = output_view_->font();
+    if (font.pointSize() != clamped) {
+      font.setPointSize(clamped);
+      output_view_->setFont(font);
+    }
+#if defined(GMSSH_HAS_WEBTERMINAL)
+    if (!use_web_terminal_) {
+      updateTerminalWindowSize();
+      renderTerminalBuffer();
+    }
+#else
+    updateTerminalWindowSize();
+    renderTerminalBuffer();
+#endif
+  }
+
+#if defined(GMSSH_HAS_WEBTERMINAL)
+  if (web_terminal_view_ != nullptr) {
+    const auto script =
+        QStringLiteral(
+            "window.gmsshSetFontSize && window.gmsshSetFontSize(%1, %2);")
+            .arg(clamped)
+            .arg(update_reset_baseline ? QStringLiteral("true") : QStringLiteral("false"));
+    web_terminal_view_->page()->runJavaScript(script);
+  }
+#endif
 }
 
 #if defined(GMSSH_HAS_WEBTERMINAL)

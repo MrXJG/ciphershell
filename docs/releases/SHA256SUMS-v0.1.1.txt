@@ -1,0 +1,3 @@
+90294a96e590dd7460f436b524df5bfdff9d0a23a04999df423b0f7b5eac7a0f  ciphershell-0.1.1-Darwin.dmg
+a9b57b3eecb8293fbaf30ce9113d9200533899e219afea3c77a010c64adac3f0  ciphershell-0.1.1-win64-setup.exe
+5d37895838038df3971ff8f59d6ad7ef691829f215e7a62369cf4e6ac6911af7  ciphershell-0.1.1-win64-portable.zip

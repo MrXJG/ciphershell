@@ -10,6 +10,8 @@
 class QSocketNotifier;
 class QProcess;
 class QTimer;
+class QKeyEvent;
+class QWheelEvent;
 #if defined(GMSSH_HAS_WEBTERMINAL)
 class QWebEngineView;
 class QWebChannel;
@@ -75,6 +77,11 @@ class TerminalSessionWidget : public QWidget {
   void closeTerminalProcess();
   void finishTerminalSession(int exit_code, bool normal_exit);
   void updateTerminalWindowSize();
+  bool handleZoomKeyPress(QKeyEvent* event);
+  bool handleZoomWheel(QWheelEvent* event);
+  void adjustTerminalFontSize(int delta);
+  void resetTerminalFontSize();
+  void applyTerminalFontSize(int point_size, bool update_reset_baseline = false);
   void auditInputBytes(const QByteArray& data);
   void flushPendingAuditInput();
   void auditTerminalOutput(const QString& text);
@@ -137,6 +144,8 @@ class TerminalSessionWidget : public QWidget {
   int non_repaint_chunks_in_screen_mode_ = 0;
   int terminal_rows_ = 24;
   int terminal_cols_ = 80;
+  int terminal_font_size_ = 13;
+  int default_terminal_font_size_ = 13;
   bool render_pending_ = false;
   EscapeParseState escape_parse_state_ = EscapeParseState::Text;
 };

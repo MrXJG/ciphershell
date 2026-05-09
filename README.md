@@ -42,7 +42,7 @@ scripts/package_macos_app.sh
 
 This creates `build/CipherShell.app`, deploys Qt dependencies, bundles
 modern and legacy SSH/SFTP engines under `Contents/MacOS/bin`, runs the P1
-matrix with the packaged engines, and emits `build/ciphershell-0.1.0-Darwin.dmg`.
+matrix with the packaged engines, and emits `build/ciphershell-0.1.1-Darwin.dmg`.
 Set `GMSSH_RUN_PACKAGE_P1=0` to skip remote interoperability checks.
 
 ### Windows x64 (MSVC)

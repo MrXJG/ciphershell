@@ -23,10 +23,10 @@ if ([string]::IsNullOrWhiteSpace($StageDir)) {
   $StageDir = Join-Path $BuildDir "package\ciphershell"
 }
 if ([string]::IsNullOrWhiteSpace($InstallerExe)) {
-  $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.0-win64-setup.exe"
+  $InstallerExe = Join-Path $BuildDir "ciphershell-0.1.1-win64-setup.exe"
 }
 if ([string]::IsNullOrWhiteSpace($PortableZip)) {
-  $PortableZip = Join-Path $BuildDir "ciphershell-0.1.0-win64-portable.zip"
+  $PortableZip = Join-Path $BuildDir "ciphershell-0.1.1-win64-portable.zip"
 }
 if ([string]::IsNullOrWhiteSpace($ReportDir)) {
   $ReportDir = Join-Path $BuildDir ("package-verification\" + (Get-Date -Format "yyyyMMdd-HHmmss"))

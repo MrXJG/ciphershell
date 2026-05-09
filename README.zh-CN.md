@@ -41,7 +41,7 @@ scripts/package_macos_app.sh
 ```
 
 该脚本会生成 `build/CipherShell.app`，部署 Qt 依赖，将 modern/legacy 的 SSH/SFTP
-引擎打入 `Contents/MacOS/bin`，并产出 `build/ciphershell-0.1.0-Darwin.dmg`。
+引擎打入 `Contents/MacOS/bin`，并产出 `build/ciphershell-0.1.1-Darwin.dmg`。
 如果需要跳过远端互通检查，可设置 `GMSSH_RUN_PACKAGE_P1=0`。
 
 ### Windows x64 (MSVC)
