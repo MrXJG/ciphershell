@@ -1,6 +1,6 @@
 # CipherShell (V1)
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[简体中文](README.md) | [English](README.en.md)
 
 基于 Qt/C++ 的 SSH 图形客户端，内置国密算法策略与 OpenSSH 引擎适配能力。
 
