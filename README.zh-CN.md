@@ -4,6 +4,8 @@
 
 基于 Qt/C++ 的 SSH 图形客户端，内置国密算法策略与 OpenSSH 引擎适配能力。
 
+> 作者博客（技术分享与生活记录）：[https://www.xiangjigong.top/](https://www.xiangjigong.top/)
+
 ## 已实现能力
 
 - 多会话终端标签页（基于进程）

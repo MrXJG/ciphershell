@@ -4,6 +4,8 @@
 
 Qt/C++ SSH GUI client with GM-aware algorithm policy and OpenSSH engine adapter.
 
+> Author blog (tech sharing and life notes): [https://www.xiangjigong.top/](https://www.xiangjigong.top/)
+
 ## Implemented capabilities
 
 - Multi-session terminal tabs (process-backed)
